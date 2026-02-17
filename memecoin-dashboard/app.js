@@ -3,31 +3,16 @@
     'use strict';
 
     const DEXSCREENER_API = 'https://api.dexscreener.com/latest/dex/tokens';
-    const DEXSCREENER_PAIRS_API = 'https://api.dexscreener.com/latest/dex/pairs';
-    const CHART_COLOR = '#00ff88';
     const CONFIG_URL = 'config.json';
     const API_URL = 'api.php';
     const UPDATE_INTERVAL = 5000;
-    const TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d'];
-    const DEFAULT_TIMEFRAME = '1h';
-    /** Points per TF at 5s interval: 5m=60, 15m=180, 1h=720, 4h=2880, 1d=17280 */
-    const TF_POINTS = { '5m': 60, '15m': 180, '1h': 720, '4h': 2880, '1d': 17280 };
-    const MAX_HISTORY_POINTS = 34560; // ~2 days
-    const BUILDING_THRESHOLD = 12;    // 1 min at 5s
 
-    /** @type {Chart[]} */
-    let chartInstances = [];
-
-    /** @type {Array<{ address: string, refs: object, chart: Chart }>} */
+    /** @type {Array<{ address: string, refs: object, lastPrice: string | null }>} */
     let cardRefs = [];
 
     let updateTimer = null;
     /** @type {Array<{address: string, order: number}>} */
     let tokenList = [];
-    /** @type {{ [address: string]: Array<{t: number, p: number}> }} */
-    let priceHistoryStore = {};
-    /** @type {{ [address: string]: string }} */
-    let timeframeByAddress = {};
     /** @type {Sortable | null} */
     let sortableInstance = null;
 
@@ -110,69 +95,6 @@
             return { ok: true, tokens: data.tokens };
         }
         return { ok: false, error: (data && data.error) || 'Reorder failed' };
-    }
-
-    function getTimeframeForToken(address) {
-        const v = timeframeByAddress[address];
-        return TIMEFRAMES.includes(v) ? v : DEFAULT_TIMEFRAME;
-    }
-
-    function setTimeframeForToken(address, tf) {
-        timeframeByAddress[address] = tf;
-    }
-
-    function getPriceHistory(address) {
-        const arr = priceHistoryStore[address];
-        if (!Array.isArray(arr)) return [];
-        return arr.filter((x) => x != null && typeof x.t === 'number' && typeof x.p === 'number');
-    }
-
-    function appendPricePoint(address, price) {
-        const n = parseFloat(price);
-        if (Number.isNaN(n) || n <= 0) return;
-        const points = getPriceHistory(address);
-        points.push({ t: Date.now(), p: n });
-        const keep = points.slice(-MAX_HISTORY_POINTS);
-        priceHistoryStore[address] = keep;
-    }
-
-    function clearPriceHistory(address) {
-        delete priceHistoryStore[address];
-    }
-
-    function getPointsForTimeframe(address, tf) {
-        const points = getPriceHistory(address);
-        const n = TF_POINTS[tf] ?? 720;
-        const slice = points.slice(-n);
-        const data = slice.map((x) => x.p);
-        const timestamps = slice.map((x) => x.t);
-        const labels = slice.map((_, i) =>
-            (i === 0 || i === slice.length - 1 || (slice.length > 5 && i === Math.floor(slice.length / 2)))
-                ? formatKSTShort(timestamps[i], tf)
-                : ''
-        );
-        return { labels, data, timestamps };
-    }
-
-    function formatKST(ms) {
-        const d = new Date(ms + 9 * 60 * 60 * 1000);
-        const y = d.getUTCFullYear();
-        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(d.getUTCDate()).padStart(2, '0');
-        const h = String(d.getUTCHours()).padStart(2, '0');
-        const min = String(d.getUTCMinutes()).padStart(2, '0');
-        const s = String(d.getUTCSeconds()).padStart(2, '0');
-        return `${y}-${m}-${day} ${h}:${min}:${s} KST`;
-    }
-
-    function formatKSTShort(ms, tf) {
-        const d = new Date(ms + 9 * 60 * 60 * 1000);
-        const h = String(d.getUTCHours()).padStart(2, '0');
-        const min = String(d.getUTCMinutes()).padStart(2, '0');
-        const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(d.getUTCDate()).padStart(2, '0');
-        if (tf === '1d' || tf === '4h') return `${mo}-${day} ${h}:${min}`;
-        return `${h}:${min}`;
     }
 
     async function copyAddressToClipboard(address) {
@@ -279,125 +201,6 @@
         }
     }
 
-    const crosshairPlugin = {
-        id: 'chartCrosshair',
-        afterDraw(chart) {
-            const ctx = chart && chart.ctx;
-            const tp = chart && chart.tooltip;
-            const yScale = chart && chart.scales && chart.scales.y;
-            if (!ctx || !tp || !tp.dataPoints || tp.dataPoints.length === 0 || !yScale) return;
-            const pt = tp.dataPoints[0];
-            const el = pt && pt.element;
-            const x = el && typeof el.x === 'number' && Number.isFinite(el.x) ? el.x : null;
-            const top = typeof yScale.top === 'number' && Number.isFinite(yScale.top) ? yScale.top : 0;
-            const bottom = typeof yScale.bottom === 'number' && Number.isFinite(yScale.bottom) ? yScale.bottom : 0;
-            if (x == null || !Number.isFinite(top) || !Number.isFinite(bottom)) return;
-            ctx.save();
-            ctx.strokeStyle = 'rgba(139, 152, 165, 0.35)';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([4, 4]);
-            ctx.beginPath();
-            ctx.moveTo(x, top);
-            ctx.lineTo(x, bottom);
-            ctx.stroke();
-            ctx.restore();
-        },
-    };
-    if (typeof Chart !== 'undefined') Chart.register(crosshairPlugin);
-
-    function createPriceChart(canvas, address, timeframe) {
-        const tf = TIMEFRAMES.includes(timeframe) ? timeframe : DEFAULT_TIMEFRAME;
-        const { labels, data, timestamps } = getPointsForTimeframe(address, tf);
-
-        const ch = new Chart(canvas, {
-            type: 'line',
-            data: {
-                labels: labels.slice(),
-                datasets: [{
-                    label: 'Price',
-                    data: data.slice(),
-                    borderColor: CHART_COLOR,
-                    backgroundColor: 'transparent',
-                    fill: false,
-                    tension: 0.35,
-                    pointRadius: 0,
-                    pointHoverRadius: 5,
-                    borderWidth: 2,
-                }],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                aspectRatio: 2.1,
-                interaction: { mode: 'index', intersect: false },
-                layout: { padding: { top: 8, right: 8, bottom: 6, left: 8 } },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        enabled: true,
-                        mode: 'index',
-                        intersect: false,
-                        backgroundColor: 'rgba(26, 31, 46, 0.95)',
-                        titleColor: '#e7e9ea',
-                        bodyColor: '#e7e9ea',
-                        borderColor: 'rgba(120, 86, 255, 0.2)',
-                        borderWidth: 1,
-                        callbacks: {
-                            title() {
-                                return 'Price';
-                            },
-                            label(ctx) {
-                                const chart = ctx.chart;
-                                const ts = chart._timestamps;
-                                const idx = ctx.dataIndex;
-                                const price = ctx.parsed.y;
-                                const t = Array.isArray(ts) && ts[idx] != null ? formatKST(ts[idx]) : '';
-                                return t ? [`$${formatPrice(String(price))}`, t] : `$${formatPrice(String(price))}`;
-                            },
-                        },
-                    },
-                },
-                scales: {
-                    x: {
-                        display: true,
-                        grid: { display: true, color: 'rgba(139, 152, 165, 0.08)' },
-                        ticks: { maxTicksLimit: 5, color: 'rgba(139, 152, 165, 0.7)', font: { size: 10 } },
-                    },
-                    y: {
-                        display: true,
-                        grid: { display: true, color: 'rgba(139, 152, 165, 0.08)' },
-                        ticks: { maxTicksLimit: 4, color: 'rgba(139, 152, 165, 0.7)', font: { size: 10 } },
-                    },
-                },
-            },
-        });
-        ch._timestamps = timestamps.slice();
-        return ch;
-    }
-
-    function updateChartFromHistory(entry) {
-        const { address, chart, refs } = entry;
-        const tf = getTimeframeForToken(address);
-        const { labels, data, timestamps } = getPointsForTimeframe(address, tf);
-
-        chart.data.labels = [];
-        chart.data.datasets[0].data = [];
-        chart.data.labels = labels.slice();
-        chart.data.datasets[0].data = data.slice();
-        chart._timestamps = timestamps.slice();
-        chart.update('none');
-
-        const buildingEl = refs.buildingEl;
-        const history = getPriceHistory(address);
-        if (buildingEl) {
-            buildingEl.classList.toggle('chart-building--visible', history.length < BUILDING_THRESHOLD);
-        }
-    }
-
-    function updateChartForTimeframe(entry) {
-        updateChartFromHistory(entry);
-    }
-
     function formatPrice(s) {
         const n = parseFloat(s);
         if (Number.isNaN(n)) return '—';
@@ -407,9 +210,6 @@
         return n.toFixed(6);
     }
 
-    /**
-     * 단일 토큰 카드 DOM 생성. 상단 우측 삭제 "X", 차트 하단 타임프레임 버튼.
-     */
     function createTokenCard(item) {
         const { address, data, error } = item;
         const card = document.createElement('article');
@@ -423,37 +223,6 @@
         deleteBtn.innerHTML = '&times;';
         deleteBtn.title = 'Remove token';
         deleteBtn.addEventListener('click', () => removeToken(address));
-
-        const chartWrap = document.createElement('div');
-        chartWrap.className = 'card-chart';
-        chartWrap.setAttribute('aria-hidden', 'true');
-        const chartInner = document.createElement('div');
-        chartInner.className = 'card-chart-inner';
-        const innerInner = document.createElement('div');
-        innerInner.className = 'card-chart-inner-inner';
-        const canvas = document.createElement('canvas');
-        innerInner.appendChild(canvas);
-        const buildingEl = document.createElement('div');
-        buildingEl.className = 'chart-building';
-        buildingEl.textContent = 'Building chart...';
-        buildingEl.setAttribute('aria-hidden', 'true');
-        buildingEl.classList.toggle('chart-building--visible', getPriceHistory(address).length < BUILDING_THRESHOLD);
-        chartInner.appendChild(innerInner);
-        chartInner.appendChild(buildingEl);
-
-        const toolbar = document.createElement('div');
-        toolbar.className = 'chart-toolbar';
-        const tf = getTimeframeForToken(address);
-        TIMEFRAMES.forEach((t) => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'chart-tf-btn' + (t === tf ? ' active' : '');
-            btn.textContent = t;
-            btn.dataset.tf = t;
-            toolbar.appendChild(btn);
-        });
-        chartWrap.appendChild(chartInner);
-        chartWrap.appendChild(toolbar);
 
         const info = document.createElement('div');
         info.className = 'card-info';
@@ -544,25 +313,13 @@
         stats.append(fdvEl, mcEl, volEl);
 
         info.append(logoRow, tickerRow, priceEl, stats);
-        card.append(deleteBtn, chartWrap, info);
+        card.append(deleteBtn, info);
 
-        const pair = data?.pair;
-        const pairAddress = pair?.pairAddress || null;
-        const chainId = pair?.chainId || null;
         const refs = {
             card, tickerEl, priceEl, fdvVal, mcVal, volVal,
             logoImg, logoFallback,
-            toolbarEl: toolbar, chartWrapEl: chartWrap, buildingEl,
         };
-        return { card, priceForChart: data?.priceUsd ?? null, refs, pairAddress, chainId };
-    }
-
-    function syncToolbarState(toolbar, activeTf) {
-        toolbar.querySelectorAll('.chart-tf-btn').forEach((b) => {
-            const isActive = b.dataset.tf === activeTf;
-            b.classList.toggle('active', isActive);
-            b.disabled = isActive;
-        });
+        return { card, refs };
     }
 
     function updateCardContent(refs, item, prevPrice) {
@@ -605,70 +362,22 @@
     function renderTokenCards(grid, list, opts) {
         const addedAddress = opts && opts.addedAddress;
         destroySortable();
-        for (const c of chartInstances) c.destroy();
-        chartInstances = [];
         cardRefs = [];
         grid.innerHTML = '';
 
         const fragment = document.createDocumentFragment();
-        const meta = [];
         for (const item of list) {
             const out = createTokenCard(item);
             if (addedAddress && item.address === addedAddress) out.card.classList.add('token-card--enter');
-            meta.push({
+            cardRefs.push({
+                address: item.address,
                 refs: out.refs,
-                pairAddress: out.pairAddress,
-                chainId: out.chainId,
+                lastPrice: item.data?.priceUsd ?? null,
             });
             fragment.appendChild(out.card);
         }
         grid.appendChild(fragment);
-
-        const canvases = grid.querySelectorAll('.card-chart-inner-inner canvas');
-        canvases.forEach((canvas, i) => {
-            const item = list[i];
-            const m = meta[i];
-            const tf = getTimeframeForToken(item.address);
-            const ch = createPriceChart(canvas, item.address, tf);
-            chartInstances.push(ch);
-            const entry = {
-                address: item.address,
-                refs: m.refs,
-                chart: ch,
-                pairAddress: m.pairAddress,
-                chainId: m.chainId,
-                lastPrice: item.data?.priceUsd ?? null,
-                tfLoading: false,
-            };
-            cardRefs.push(entry);
-            updateChartFromHistory(entry);
-            attachTimeframeHandlers(entry);
-        });
         initSortable(grid);
-    }
-
-    function attachTimeframeHandlers(entry) {
-        const toolbar = entry.refs.toolbarEl;
-        if (!toolbar) return;
-
-        syncToolbarState(toolbar, getTimeframeForToken(entry.address));
-
-        toolbar.querySelectorAll('.chart-tf-btn').forEach((btn) => {
-            btn.addEventListener('click', () => {
-                const tf = btn.dataset.tf;
-                if (!TIMEFRAMES.includes(tf)) return;
-                if (entry.tfLoading) return;
-
-                const currentTf = getTimeframeForToken(entry.address);
-                if (tf === currentTf) return;
-
-                entry.tfLoading = true;
-                setTimeframeForToken(entry.address, tf);
-                syncToolbarState(toolbar, tf);
-                updateChartForTimeframe(entry);
-                entry.tfLoading = false;
-            });
-        });
     }
 
     function destroySortable() {
@@ -684,7 +393,7 @@
         if (!cards.length || typeof Sortable === 'undefined') return;
         sortableInstance = new Sortable(grid, {
             animation: 150,
-            filter: '.token-card-delete, .chart-tf-btn, .token-copy-btn',
+            filter: '.token-card-delete, .token-copy-btn',
             ghostClass: 'sortable-ghost',
             onStart(evt) {
                 evt.item.classList.add('token-card--dragging');
@@ -695,20 +404,14 @@
                 if (ordered.length === 0) return;
                 apiReorderTokens(ordered).then((res) => {
                     if (!res.ok) return;
-                    const byAddr = new Map(cardRefs.map((e, i) => [e.address, { entry: e, chart: chartInstances[i] }]));
+                    const byAddr = new Map(cardRefs.map((e) => [e.address, e]));
                     const newRefs = [];
-                    const newCharts = [];
                     for (const a of ordered) {
                         const x = byAddr.get(a);
-                        if (x) {
-                            newRefs.push(x.entry);
-                            newCharts.push(x.chart);
-                        }
+                        if (x) newRefs.push(x);
                     }
                     cardRefs.length = 0;
                     cardRefs.push(...newRefs);
-                    chartInstances.length = 0;
-                    chartInstances.push(...newCharts);
                 });
             },
         });
@@ -717,7 +420,6 @@
     function showEmptyState(grid) {
         destroySortable();
         grid.innerHTML = '<p class="empty-state">No tokens added. Add a contract address above.</p>';
-        chartInstances = [];
         cardRefs = [];
     }
 
@@ -757,12 +459,9 @@
             for (let i = 0; i < results.length && i < cardRefs.length; i++) {
                 if (cardRefs[i].address === results[i].address) {
                     updateCardContent(cardRefs[i].refs, results[i], cardRefs[i].lastPrice);
-                    const price = results[i].data?.priceUsd ?? null;
-                    cardRefs[i].lastPrice = price;
-                    if (price != null) appendPricePoint(results[i].address, price);
+                    cardRefs[i].lastPrice = results[i].data?.priceUsd ?? null;
                 }
             }
-            for (const e of cardRefs) updateChartFromHistory(e);
         } finally {
             grid.classList.remove('token-grid--updating');
             if (indicator) indicator.classList.remove('update-indicator--active');
@@ -801,8 +500,6 @@
             return;
         }
 
-        if (data?.priceUsd != null) appendPricePoint(addr, data.priceUsd);
-
         const grid = document.querySelector('.token-grid');
         if (!grid) {
             if (btn) btn.disabled = false;
@@ -834,7 +531,6 @@
             return;
         }
 
-        clearPriceHistory(address);
         const tokens = getTokens();
 
         if (tokens.length === 0) {
@@ -846,15 +542,13 @@
         const idx = cardRefs.findIndex((c) => c.address === address);
         if (idx < 0) return;
 
-        const { refs, chart } = cardRefs[idx];
+        const { refs } = cardRefs[idx];
         refs.card.classList.add('token-card--exit');
         let done = false;
         const onDone = () => {
             if (done) return;
             done = true;
-            chart.destroy();
             refs.card.remove();
-            chartInstances.splice(idx, 1);
             cardRefs.splice(idx, 1);
         };
         refs.card.addEventListener('animationend', onDone, { once: true });
@@ -877,9 +571,6 @@
                 return { address, data, error };
             })
         );
-        for (const r of results) {
-            if (r.data?.priceUsd != null) appendPricePoint(r.address, r.data.priceUsd);
-        }
         renderTokenCards(grid, results);
         startUpdateTimer();
     }
