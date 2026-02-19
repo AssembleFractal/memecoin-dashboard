@@ -427,7 +427,19 @@
             row.className = 'history-panel-row' + (it.read ? ' history-panel-row--read' : '');
             const timeStr = formatKST(it.triggeredAt);
             const direction = it.actualPrice >= it.targetPrice ? 'above' : 'below';
-            row.innerHTML = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">' + escapeHtml(direction) + ' $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time>';
+            row.innerHTML = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">' + escapeHtml(direction) + ' $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
+            const deleteBtn = row.querySelector('.history-item-delete');
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                apiDeleteHistoryItem(it.id).then((r) => {
+                    if (r.ok) {
+                        updateHistoryBadge(r.unreadCount);
+                        renderHistoryPanelList(r.items);
+                    } else {
+                        showToast(r.error || 'Failed to delete');
+                    }
+                });
+            });
             h.list.appendChild(row);
         }
     }
@@ -933,7 +945,9 @@
                 const lastPrice = a.lastPrice != null ? Number(a.lastPrice) : null;
                 let crossed = false;
                 if (lastPrice == null || Number.isNaN(lastPrice)) {
-                    crossed = Math.abs(price - target) < 0.00000001;
+                    await apiUpdateAlertLastPrice(a.id, price);
+                    alertsCache = (await apiGetAlerts()).alerts;
+                    continue;
                 } else {
                     const wasBelow = lastPrice < target;
                     const isAbove = price >= target;
@@ -953,7 +967,7 @@
                     actualPrice: price,
                 });
                 if (addRes.ok && addRes.unreadCount != null) updateHistoryBadge(addRes.unreadCount);
-                await apiDeleteAlert(a.id);
+                await apiUpdateAlertLastPrice(a.id, price);
                 alertsCache = (await apiGetAlerts()).alerts;
             }
         }
