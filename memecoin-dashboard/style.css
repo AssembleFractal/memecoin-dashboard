@@ -5,23 +5,18 @@
 }
 
 :root {
-    --bg-base: #0f1419;
-    --bg-card: #1a1f2e;
-    --bg-chart: #141922;
-    --border: rgba(99, 102, 241, 0.12);
-    --border-strong: rgba(99, 102, 241, 0.22);
-    --text: #e7e9ea;
-    --text-muted: #8b98a5;
+    --bg-base: #000000;
+    --bg-card: #111111;
+    --border: #1a1a1a;
+    --border-strong: #222222;
+    --text: #ffffff;
+    --text-muted: #888888;
     --accent-green: #00ff88;
-    --accent-green-dim: rgba(0, 255, 136, 0.15);
-    --accent-blue: #7856ff;
-    --accent-purple: #8b5cf6;
-    --accent-blue-dim: rgba(120, 86, 255, 0.12);
-    --radius: 16px;
-    --radius-sm: 10px;
-    --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.25);
-    --shadow-card-hover: 0 12px 40px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(120, 86, 255, 0.08);
-    --glow: 0 0 20px rgba(0, 255, 136, 0.08);
+    --accent-red: #ff4444;
+    --radius: 8px;
+    --radius-sm: 6px;
+    --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.3);
+    --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
 body {
@@ -111,13 +106,13 @@ body {
 }
 
 .control-input:hover {
-    border-color: rgba(59, 130, 246, 0.25);
+    border-color: #333333;
 }
 
 .control-input:focus {
     outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+    border-color: #ffffff;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
 
 .control-btn {
@@ -128,18 +123,17 @@ body {
     font-size: 0.9375rem;
     font-weight: 600;
     font-family: inherit;
-    background: #3b82f6;
-    color: #fff;
-    border: none;
+    background: transparent;
+    color: #ffffff;
+    border: 1px solid #ffffff;
     border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: transform 0.15s, box-shadow 0.2s, opacity 0.2s, background 0.2s;
+    transition: background 0.2s, color 0.2s;
 }
 
 .control-btn:hover {
-    transform: translateY(-1px);
-    background: #2563eb;
-    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.35);
+    background: #ffffff;
+    color: #000000;
 }
 
 .control-btn:active {
@@ -193,19 +187,6 @@ main {
     transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.2s, opacity 0.3s ease;
 }
 
-.token-card::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    padding: 1px;
-    background: linear-gradient(135deg, rgba(0, 255, 136, 0.15) 0%, transparent 40%, transparent 60%, rgba(120, 86, 255, 0.12) 100%);
-    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    pointer-events: none;
-}
 
 .token-card:hover {
     transform: translateY(-4px);
@@ -236,15 +217,12 @@ main {
 }
 
 .token-card--error {
-    border-color: rgba(248, 113, 113, 0.35);
+    border-color: var(--accent-red);
 }
 
-.token-card--error::before {
-    background: linear-gradient(135deg, rgba(248, 113, 113, 0.2) 0%, transparent 50%);
-}
 
 .token-card--error .token-ticker {
-    color: #f87171;
+    color: var(--accent-red);
 }
 
 .token-grid--updating .token-card {
@@ -309,9 +287,9 @@ main {
 }
 
 .token-card-delete:hover {
-    color: #f87171;
-    background: rgba(248, 113, 113, 0.12);
-    border-color: rgba(248, 113, 113, 0.25);
+    color: var(--accent-red);
+    background: rgba(255, 68, 68, 0.1);
+    border-color: rgba(255, 68, 68, 0.3);
 }
 
 .loading {
@@ -322,7 +300,7 @@ main {
 }
 
 .loading.error {
-    color: #f87171;
+    color: var(--accent-red);
 }
 
 /* --- Card info --- */
@@ -350,7 +328,7 @@ main {
     width: 32px;
     height: 32px;
     border-radius: 50%;
-    background: rgba(139, 152, 165, 0.15);
+    background: rgba(255, 255, 255, 0.05);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -415,7 +393,7 @@ main {
     padding: 0;
     border: none;
     background: transparent;
-    color: #8892b0;
+    color: var(--text-muted);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -425,7 +403,7 @@ main {
 }
 
 .token-copy-btn:hover {
-    color: #fff;
+    color: #ffffff;
 }
 
 .token-copy-btn svg {
@@ -535,10 +513,10 @@ main {
     font-size: 0.875rem;
     font-weight: 500;
     color: #fff;
-    background: #1a1f2e;
+    background: #111111;
     border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.3s ease;
