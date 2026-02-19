@@ -180,8 +180,58 @@
         return data && data.ok ? { ok: true, alerts: data.alerts || [] } : { ok: false };
     }
 
+    async function apiDeleteHistoryItem(itemId) {
+        const res = await fetch(API_URL + '?action=deleteHistoryItem', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: itemId }),
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+            return { ok: true, items: data.items || [], unreadCount: typeof data.unreadCount === 'number' ? data.unreadCount : 0 };
+        }
+        return { ok: false, error: (data && data.error) || 'Delete failed' };
+    }
+
+    async function apiClearAllHistory() {
+        const res = await fetch(API_URL + '?action=clearAllHistory', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+            return { ok: true, items: [], unreadCount: 0 };
+        }
+        return { ok: false, error: (data && data.error) || 'Clear failed' };
+    }
+
     let alertsCache = [];
     let historyUnreadCount = 0;
+
+    function updateFireIndicator(fireIndicator, volume24h, marketCap) {
+        if (!fireIndicator) return;
+        const vol = volume24h != null && !Number.isNaN(Number(volume24h)) ? Number(volume24h) : 0;
+        const mc = marketCap != null && !Number.isNaN(Number(marketCap)) && Number(marketCap) > 0 ? Number(marketCap) : 0;
+        const ratio = mc > 0 ? vol / mc : 0;
+        
+        if (ratio < 1) {
+            fireIndicator.textContent = '';
+            fireIndicator.style.display = 'none';
+        } else if (ratio >= 4) {
+            fireIndicator.textContent = '🔥🔥🔥+';
+            fireIndicator.style.display = 'block';
+        } else if (ratio >= 3) {
+            fireIndicator.textContent = '🔥🔥🔥';
+            fireIndicator.style.display = 'block';
+        } else if (ratio >= 2) {
+            fireIndicator.textContent = '🔥🔥';
+            fireIndicator.style.display = 'block';
+        } else {
+            fireIndicator.textContent = '🔥';
+            fireIndicator.style.display = 'block';
+        }
+    }
 
     function updateHistoryBadge(count) {
         historyUnreadCount = count;
@@ -304,7 +354,7 @@
         btn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"></path><circle cx="12" cy="12" r="10"></circle></svg><span class="history-badge history-badge--hidden">0</span>';
         const panel = document.createElement('div');
         panel.className = 'history-panel';
-        panel.innerHTML = '<div class="history-panel-header"><span>Alert history</span><button type="button" class="history-mark-read">Mark all read</button></div><div class="history-panel-list"></div><p class="history-panel-empty">No alerts triggered yet.</p>';
+        panel.innerHTML = '<div class="history-panel-header"><span>Alert history</span><div class="history-panel-header-actions"><button type="button" class="history-clear-all">Clear all history</button><button type="button" class="history-mark-read">Mark all read</button></div></div><div class="history-panel-list"></div><p class="history-panel-empty">No alerts triggered yet.</p>';
         wrap.appendChild(btn);
         wrap.appendChild(panel);
         btn.addEventListener('click', (e) => {
@@ -318,6 +368,18 @@
                     renderHistoryPanelList(r.items);
                 }
             });
+        });
+        panel.querySelector('.history-clear-all').addEventListener('click', () => {
+            if (confirm('Clear all alert history?')) {
+                apiClearAllHistory().then((r) => {
+                    if (r.ok) {
+                        updateHistoryBadge(r.unreadCount);
+                        renderHistoryPanelList(r.items);
+                    } else {
+                        showToast(r.error || 'Failed to clear history');
+                    }
+                });
+            }
         });
         document.addEventListener('click', (e) => {
             if (historyPanelEl && panel.classList.contains('history-panel--open') && !panel.contains(e.target) && !btn.contains(e.target)) {
@@ -507,6 +569,10 @@
         card.dataset.address = address;
         if (error) card.classList.add('token-card--error');
 
+        const fireIndicator = document.createElement('div');
+        fireIndicator.className = 'token-fire-indicator';
+        card.appendChild(fireIndicator);
+
         const deleteBtn = document.createElement('button');
         deleteBtn.type = 'button';
         deleteBtn.className = 'token-card-delete';
@@ -648,12 +714,15 @@
         volEl.append(volLbl, volVal);
         stats.append(fdvEl, mcEl, volEl);
 
-        info.append(logoRow, tickerRow, socialLinksRow, priceEl, stats);
+        info.append(logoRow, tickerRow, priceEl, socialLinksRow, stats);
         card.append(deleteBtn, info);
+
+        updateFireIndicator(fireIndicator, data?.volume24h, data?.marketCap);
 
         const refs = {
             card, tickerEl, priceEl, fdvVal, mcVal, volVal,
             logoImg, logoFallback,
+            fireIndicator,
         };
         return { card, refs };
     }
@@ -680,6 +749,8 @@
         refs.fdvVal.textContent = formatDexScreener(data?.fdv);
         refs.mcVal.textContent = formatDexScreener(data?.marketCap);
         refs.volVal.textContent = formatDexScreener(data?.volume24h);
+
+        updateFireIndicator(refs.fireIndicator, data?.volume24h, data?.marketCap);
 
         const fallbackLetter = (data?.symbol || '?')[0].toUpperCase();
         if (refs.logoFallback) refs.logoFallback.textContent = error ? '?' : fallbackLetter;

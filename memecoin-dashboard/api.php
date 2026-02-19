@@ -254,6 +254,52 @@ if ($action === 'getHistory') {
     exit;
 }
 
+if ($action === 'deleteHistoryItem') {
+    $itemId = isset($input['id']) ? trim($input['id']) : '';
+    if ($itemId === '') {
+        echo json_encode(['ok' => false, 'error' => 'Missing id']);
+        exit;
+    }
+    $data = loadJson($historyPath, ['items' => [], 'unreadCount' => 0]);
+    $items = isset($data['items']) ? $data['items'] : [];
+    $unreadCount = isset($data['unreadCount']) ? (int) $data['unreadCount'] : 0;
+    $found = false;
+    $wasUnread = false;
+    foreach ($items as $idx => $it) {
+        if (isset($it['id']) && $it['id'] === $itemId) {
+            $wasUnread = !isset($it['read']) || !$it['read'];
+            array_splice($items, $idx, 1);
+            $found = true;
+            break;
+        }
+    }
+    if (!$found) {
+        echo json_encode(['ok' => false, 'error' => 'Item not found']);
+        exit;
+    }
+    if ($wasUnread) {
+        $unreadCount = max(0, $unreadCount - 1);
+    }
+    $data['items'] = $items;
+    $data['unreadCount'] = $unreadCount;
+    if (!saveJson($historyPath, $data)) {
+        echo json_encode(['ok' => false, 'error' => 'Failed to save']);
+        exit;
+    }
+    echo json_encode(['ok' => true, 'items' => $data['items'], 'unreadCount' => $data['unreadCount']]);
+    exit;
+}
+
+if ($action === 'clearAllHistory') {
+    $data = ['items' => [], 'unreadCount' => 0];
+    if (!saveJson($historyPath, $data)) {
+        echo json_encode(['ok' => false, 'error' => 'Failed to save']);
+        exit;
+    }
+    echo json_encode(['ok' => true, 'items' => [], 'unreadCount' => 0]);
+    exit;
+}
+
 if ($action === 'deleteAlert') {
     $alertId = isset($input['alertId']) ? trim($input['alertId']) : '';
     if ($alertId === '') {
