@@ -140,9 +140,12 @@ if ($action === 'saveAlert') {
     $addr = isset($input['tokenAddress']) ? trim($input['tokenAddress']) : '';
     $symbol = isset($input['tokenSymbol']) ? trim($input['tokenSymbol']) : '—';
     $targetPrice = isset($input['targetPrice']) ? (float) $input['targetPrice'] : 0;
-    $direction = isset($input['direction']) && in_array($input['direction'], ['above', 'below'], true) ? $input['direction'] : 'above';
     if ($addr === '' || strlen($addr) < 20) {
         echo json_encode(['ok' => false, 'error' => 'Invalid token address']);
+        exit;
+    }
+    if ($targetPrice <= 0) {
+        echo json_encode(['ok' => false, 'error' => 'Target price must be greater than 0']);
         exit;
     }
     $data = loadJson($alertsPath, ['alerts' => []]);
@@ -153,13 +156,20 @@ if ($action === 'saveAlert') {
         'tokenAddress' => $addr,
         'tokenSymbol' => $symbol,
         'targetPrice' => $targetPrice,
-        'direction' => $direction,
         'createdAt' => time(),
-        'triggeredAt' => null,
+        'lastPrice' => null,
     ];
     $data['alerts'] = $alerts;
-    if (!saveJson($alertsPath, $data)) {
-        echo json_encode(['ok' => false, 'error' => 'Failed to save']);
+    $saveResult = saveJson($alertsPath, $data);
+    if (!$saveResult) {
+        $errorMsg = 'Failed to save alerts.json';
+        if (!is_writable($alertsPath) && file_exists($alertsPath)) {
+            $errorMsg .= ' (file not writable)';
+        } elseif (!is_writable(dirname($alertsPath))) {
+            $errorMsg .= ' (directory not writable)';
+        }
+        error_log('saveAlert failed: ' . $errorMsg);
+        echo json_encode(['ok' => false, 'error' => $errorMsg]);
         exit;
     }
     echo json_encode(['ok' => true, 'alerts' => $data['alerts']]);
@@ -186,14 +196,14 @@ if ($action === 'deleteAlert') {
 }
 
 if ($action === 'addHistory') {
+    $triggeredAt = time();
     $item = [
         'id' => bin2hex(random_bytes(8)),
         'tokenAddress' => isset($input['tokenAddress']) ? trim($input['tokenAddress']) : '',
         'tokenSymbol' => isset($input['tokenSymbol']) ? trim($input['tokenSymbol']) : '—',
         'targetPrice' => isset($input['targetPrice']) ? (float) $input['targetPrice'] : 0,
         'actualPrice' => isset($input['actualPrice']) ? (float) $input['actualPrice'] : 0,
-        'direction' => isset($input['direction']) && in_array($input['direction'], ['above', 'below'], true) ? $input['direction'] : 'above',
-        'triggeredAt' => time(),
+        'triggeredAt' => $triggeredAt,
         'read' => false,
     ];
     $data = loadJson($historyPath, ['items' => [], 'unreadCount' => 0]);
@@ -244,8 +254,28 @@ if ($action === 'getHistory') {
     exit;
 }
 
-if ($action === 'markAlertTriggered') {
+if ($action === 'deleteAlert') {
     $alertId = isset($input['alertId']) ? trim($input['alertId']) : '';
+    if ($alertId === '') {
+        echo json_encode(['ok' => false, 'error' => 'Missing alertId']);
+        exit;
+    }
+    $data = loadJson($alertsPath, ['alerts' => []]);
+    $alerts = isset($data['alerts']) ? $data['alerts'] : [];
+    $data['alerts'] = array_values(array_filter($alerts, function ($a) use ($alertId) {
+        return isset($a['id']) && $a['id'] !== $alertId;
+    }));
+    if (!saveJson($alertsPath, $data)) {
+        echo json_encode(['ok' => false, 'error' => 'Failed to save']);
+        exit;
+    }
+    echo json_encode(['ok' => true, 'alerts' => $data['alerts']]);
+    exit;
+}
+
+if ($action === 'updateAlertLastPrice') {
+    $alertId = isset($input['alertId']) ? trim($input['alertId']) : '';
+    $lastPrice = isset($input['lastPrice']) ? (float) $input['lastPrice'] : null;
     if ($alertId === '') {
         echo json_encode(['ok' => false, 'error' => 'Missing alertId']);
         exit;
@@ -254,7 +284,7 @@ if ($action === 'markAlertTriggered') {
     $alerts = isset($data['alerts']) ? $data['alerts'] : [];
     foreach ($alerts as &$a) {
         if (isset($a['id']) && $a['id'] === $alertId) {
-            $a['triggeredAt'] = time();
+            $a['lastPrice'] = $lastPrice;
             break;
         }
     }

@@ -127,7 +127,11 @@
             body: JSON.stringify(payload),
         });
         const data = await res.json();
-        return data && data.ok ? { ok: true, alerts: data.alerts || [] } : { ok: false, error: (data && data.error) || 'Save failed' };
+        if (!data || !data.ok) {
+            console.error('apiSaveAlert error:', data);
+            return { ok: false, error: (data && data.error) || 'Save failed' };
+        }
+        return { ok: true, alerts: data.alerts || [] };
     }
 
     async function apiDeleteAlert(alertId) {
@@ -166,11 +170,11 @@
         return { ok: false };
     }
 
-    async function apiMarkAlertTriggered(alertId) {
-        const res = await fetch(API_URL + '?action=markAlertTriggered', {
+    async function apiUpdateAlertLastPrice(alertId, lastPrice) {
+        const res = await fetch(API_URL + '?action=updateAlertLastPrice', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ alertId }),
+            body: JSON.stringify({ alertId, lastPrice }),
         });
         const data = await res.json();
         return data && data.ok ? { ok: true, alerts: data.alerts || [] } : { ok: false };
@@ -205,12 +209,12 @@
         overlay.setAttribute('aria-hidden', 'true');
         const box = document.createElement('div');
         box.className = 'alert-modal-box';
-        box.innerHTML = '<h3 class="alert-modal-title">Price alerts</h3><p class="alert-modal-token"></p><div class="alert-modal-list"></div><div class="alert-modal-form"><label>Target price <input type="number" step="any" min="0" class="alert-modal-price" placeholder="0.00"></label><label>Notify when price is <select class="alert-modal-direction"><option value="above">Above</option><option value="below">Below</option></select></label><button type="button" class="alert-modal-save">Add alert</button></div><button type="button" class="alert-modal-close" aria-label="Close">&times;</button>';
+        box.innerHTML = '<h3 class="alert-modal-title">Price alerts</h3><p class="alert-modal-token"></p><div class="alert-modal-list"></div><div class="alert-modal-form"><label>Target price <input type="number" step="any" min="0" class="alert-modal-price" placeholder="0.00"></label><button type="button" class="alert-modal-save control-btn"><span class="control-btn-icon">+</span>Add alert</button></div><button type="button" class="alert-modal-close" aria-label="Close">&times;</button>';
         overlay.appendChild(box);
         document.body.appendChild(overlay);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAlertsModal(); });
         box.querySelector('.alert-modal-close').addEventListener('click', () => closeAlertsModal());
-        alertModalEl = { overlay, box, tokenLabel: box.querySelector('.alert-modal-token'), list: box.querySelector('.alert-modal-list'), priceInput: box.querySelector('.alert-modal-price'), directionSelect: box.querySelector('.alert-modal-direction'), saveBtn: box.querySelector('.alert-modal-save') };
+        alertModalEl = { overlay, box, tokenLabel: box.querySelector('.alert-modal-token'), list: box.querySelector('.alert-modal-list'), priceInput: box.querySelector('.alert-modal-price'), saveBtn: box.querySelector('.alert-modal-save') };
         return alertModalEl;
     }
 
@@ -224,7 +228,7 @@
         renderModalAlertsList(tokenAddress);
         modal.saveBtn.onclick = () => {
             const targetPrice = parseFloat(modal.priceInput.value);
-            if (Number.isNaN(targetPrice) || targetPrice < 0) {
+            if (Number.isNaN(targetPrice) || targetPrice <= 0) {
                 showToast('Enter a valid target price');
                 return;
             }
@@ -232,7 +236,6 @@
                 tokenAddress,
                 tokenSymbol,
                 targetPrice,
-                direction: modal.directionSelect.value,
             }).then((r) => {
                 if (r.ok) {
                     alertsCache = r.alerts;
@@ -240,6 +243,7 @@
                     modal.priceInput.value = '';
                     showToast('Alert added');
                 } else {
+                    console.error('Failed to save alert:', r.error);
                     showToast(r.error || 'Failed to save');
                 }
             });
@@ -268,7 +272,7 @@
             const row = document.createElement('div');
             row.className = 'alert-modal-row';
             const desc = document.createElement('span');
-            desc.textContent = '$' + formatPrice(String(a.targetPrice)) + ' (' + a.direction + ')' + (a.triggeredAt ? ' · triggered' : '');
+            desc.textContent = '$' + formatPrice(String(a.targetPrice));
             const delBtn = document.createElement('button');
             delBtn.type = 'button';
             delBtn.className = 'alert-modal-delete';
@@ -338,6 +342,18 @@
         }
     }
 
+    function formatKST(timestamp) {
+        const date = new Date(timestamp * 1000);
+        const kstDate = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+        const year = kstDate.getUTCFullYear();
+        const month = String(kstDate.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(kstDate.getUTCDate()).padStart(2, '0');
+        const hours = String(kstDate.getUTCHours()).padStart(2, '0');
+        const minutes = String(kstDate.getUTCMinutes()).padStart(2, '0');
+        const seconds = String(kstDate.getUTCSeconds()).padStart(2, '0');
+        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} KST`;
+    }
+
     function renderHistoryPanelList(items) {
         const h = historyPanelEl;
         if (!h) return;
@@ -347,8 +363,9 @@
         for (const it of list) {
             const row = document.createElement('div');
             row.className = 'history-panel-row' + (it.read ? ' history-panel-row--read' : '');
-            const time = new Date(it.triggeredAt * 1000).toLocaleString();
-            row.innerHTML = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">' + escapeHtml(it.direction) + ' $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(time) + '</time>';
+            const timeStr = formatKST(it.triggeredAt);
+            const direction = it.actualPrice >= it.targetPrice ? 'above' : 'below';
+            row.innerHTML = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">' + escapeHtml(direction) + ' $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time>';
             h.list.appendChild(row);
         }
     }
@@ -842,17 +859,30 @@
                 if (a.tokenAddress !== r.address) continue;
                 const target = Number(a.targetPrice);
                 if (Number.isNaN(target)) continue;
-                const crossed = a.direction === 'above' ? price >= target : price <= target;
-                if (!crossed) continue;
+                const lastPrice = a.lastPrice != null ? Number(a.lastPrice) : null;
+                let crossed = false;
+                if (lastPrice == null || Number.isNaN(lastPrice)) {
+                    crossed = Math.abs(price - target) < 0.00000001;
+                } else {
+                    const wasBelow = lastPrice < target;
+                    const isAbove = price >= target;
+                    const wasAbove = lastPrice > target;
+                    const isBelow = price <= target;
+                    crossed = (wasBelow && isAbove) || (wasAbove && isBelow);
+                }
+                if (!crossed) {
+                    await apiUpdateAlertLastPrice(a.id, price);
+                    alertsCache = (await apiGetAlerts()).alerts;
+                    continue;
+                }
                 const addRes = await apiAddHistory({
                     tokenAddress: a.tokenAddress,
                     tokenSymbol: a.tokenSymbol || symbol,
                     targetPrice: target,
                     actualPrice: price,
-                    direction: a.direction,
                 });
                 if (addRes.ok && addRes.unreadCount != null) updateHistoryBadge(addRes.unreadCount);
-                await apiMarkAlertTriggered(a.id);
+                await apiDeleteAlert(a.id);
                 alertsCache = (await apiGetAlerts()).alerts;
             }
         }
