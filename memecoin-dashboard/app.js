@@ -183,8 +183,19 @@
         const marketCap = pair.marketCap != null && !Number.isNaN(Number(pair.marketCap)) ? Number(pair.marketCap) : null;
         const fdv = pair.fdv != null && !Number.isNaN(Number(pair.fdv)) ? Number(pair.fdv) : null;
         const volume24h = pair.volume?.h24 != null && !Number.isNaN(Number(pair.volume.h24)) ? Number(pair.volume.h24) : null;
+        
+        let twitterUrl = null;
+        const socials = base.info?.socials || pair.info?.socials;
+        if (Array.isArray(socials)) {
+            const twitter = socials.find((s) => s && typeof s === 'object' && s.type === 'twitter' && typeof s.url === 'string');
+            if (twitter && twitter.url) twitterUrl = twitter.url.trim();
+        }
 
-        return { name, symbol, imageUrl, priceUsd, marketCap, fdv, volume24h, pair };
+        const chainId = pair.chainId != null ? String(pair.chainId).toLowerCase() : '';
+        const GMGN_CHAIN_MAP = { solana: 'sol', base: 'base', bsc: 'bsc', ethereum: 'eth', arbitrum: 'arb', polygon: 'polygon', avalanche: 'avax' };
+        const gmgnChain = GMGN_CHAIN_MAP[chainId] || chainId || 'sol';
+
+        return { name, symbol, imageUrl, priceUsd, marketCap, fdv, volume24h, twitterUrl, chainId, gmgnChain, pair };
     }
 
     async function fetchTokenData(address) {
@@ -276,6 +287,36 @@
         const tickerRow = document.createElement('div');
         tickerRow.className = 'ticker-row';
         tickerRow.append(tickerEl, copyBtn);
+
+        if (data?.twitterUrl) {
+            const twitterBtn = document.createElement('a');
+            twitterBtn.href = data.twitterUrl;
+            twitterBtn.target = '_blank';
+            twitterBtn.rel = 'noopener noreferrer';
+            twitterBtn.className = 'token-twitter-btn';
+            twitterBtn.title = 'Open Twitter/X';
+            twitterBtn.setAttribute('aria-label', 'Open Twitter/X');
+            twitterBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>';
+            twitterBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+            tickerRow.appendChild(twitterBtn);
+        }
+
+        const gmgnChain = data?.gmgnChain || 'sol';
+        const gmgnUrl = `https://gmgn.ai/${gmgnChain}/token/${encodeURIComponent(address)}`;
+        const gmgnBtn = document.createElement('a');
+        gmgnBtn.href = gmgnUrl;
+        gmgnBtn.target = '_blank';
+        gmgnBtn.rel = 'noopener noreferrer';
+        gmgnBtn.className = 'token-gmgn-btn';
+        gmgnBtn.title = 'Open on GMGN';
+        gmgnBtn.setAttribute('aria-label', 'Open on GMGN');
+        gmgnBtn.textContent = 'G';
+        gmgnBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+        tickerRow.appendChild(gmgnBtn);
 
         const priceEl = document.createElement('div');
         priceEl.className = 'token-price';
@@ -393,7 +434,7 @@
         if (!cards.length || typeof Sortable === 'undefined') return;
         sortableInstance = new Sortable(grid, {
             animation: 150,
-            filter: '.token-card-delete, .token-copy-btn',
+            filter: '.token-card-delete, .token-copy-btn, .token-twitter-btn, .token-gmgn-btn',
             ghostClass: 'sortable-ghost',
             onStart(evt) {
                 evt.item.classList.add('token-card--dragging');
