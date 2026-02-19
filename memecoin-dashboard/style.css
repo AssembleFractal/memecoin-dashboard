@@ -493,8 +493,8 @@ main {
 
 .token-alert-btn {
     flex-shrink: 0;
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     padding: 0;
     border: none;
     background: transparent;
@@ -515,8 +515,8 @@ main {
 
 .token-alert-btn svg {
     display: block;
-    width: 11px;
-    height: 11px;
+    width: 10px;
+    height: 10px;
 }
 
 .token-price {
