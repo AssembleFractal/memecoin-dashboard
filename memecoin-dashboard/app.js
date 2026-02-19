@@ -97,6 +97,268 @@
         return { ok: false, error: (data && data.error) || 'Reorder failed' };
     }
 
+    async function apiGetAlerts() {
+        try {
+            const res = await fetch(API_URL + '?action=getAlerts');
+            const data = await res.json();
+            return data && data.ok && Array.isArray(data.alerts) ? { ok: true, alerts: data.alerts } : { ok: false, alerts: [] };
+        } catch (e) {
+            return { ok: false, alerts: [] };
+        }
+    }
+
+    async function apiGetHistory() {
+        try {
+            const res = await fetch(API_URL + '?action=getHistory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            const data = await res.json();
+            if (data && data.ok) {
+                return { ok: true, items: Array.isArray(data.items) ? data.items : [], unreadCount: typeof data.unreadCount === 'number' ? data.unreadCount : 0 };
+            }
+            return { ok: false, items: [], unreadCount: 0 };
+        } catch (e) {
+            return { ok: false, items: [], unreadCount: 0 };
+        }
+    }
+
+    async function apiSaveAlert(payload) {
+        const res = await fetch(API_URL + '?action=saveAlert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        return data && data.ok ? { ok: true, alerts: data.alerts || [] } : { ok: false, error: (data && data.error) || 'Save failed' };
+    }
+
+    async function apiDeleteAlert(alertId) {
+        const res = await fetch(API_URL + '?action=deleteAlert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ alertId }),
+        });
+        const data = await res.json();
+        return data && data.ok ? { ok: true, alerts: data.alerts || [] } : { ok: false, error: (data && data.error) || 'Delete failed' };
+    }
+
+    async function apiAddHistory(payload) {
+        const res = await fetch(API_URL + '?action=addHistory', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+            return { ok: true, unreadCount: typeof data.unreadCount === 'number' ? data.unreadCount : 0 };
+        }
+        return { ok: false };
+    }
+
+    async function apiMarkHistoryRead(id) {
+        const res = await fetch(API_URL + '?action=markHistoryRead', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(id != null ? { id } : {}),
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+            return { ok: true, items: data.items || [], unreadCount: typeof data.unreadCount === 'number' ? data.unreadCount : 0 };
+        }
+        return { ok: false };
+    }
+
+    async function apiMarkAlertTriggered(alertId) {
+        const res = await fetch(API_URL + '?action=markAlertTriggered', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ alertId }),
+        });
+        const data = await res.json();
+        return data && data.ok ? { ok: true, alerts: data.alerts || [] } : { ok: false };
+    }
+
+    let alertsCache = [];
+    let historyUnreadCount = 0;
+
+    function updateHistoryBadge(count) {
+        historyUnreadCount = count;
+        const wrap = document.getElementById('header-history-wrap');
+        if (!wrap) return;
+        const badge = wrap.querySelector('.history-badge');
+        if (badge) {
+            if (count <= 0) {
+                badge.classList.add('history-badge--hidden');
+                badge.textContent = '0';
+            } else {
+                badge.classList.remove('history-badge--hidden');
+                badge.textContent = count > 99 ? '99+' : String(count);
+            }
+        }
+    }
+
+    let alertModalEl = null;
+    let historyPanelEl = null;
+
+    function getOrCreateAlertModal() {
+        if (alertModalEl) return alertModalEl;
+        const overlay = document.createElement('div');
+        overlay.className = 'alert-modal-overlay';
+        overlay.setAttribute('aria-hidden', 'true');
+        const box = document.createElement('div');
+        box.className = 'alert-modal-box';
+        box.innerHTML = '<h3 class="alert-modal-title">Price alerts</h3><p class="alert-modal-token"></p><div class="alert-modal-list"></div><div class="alert-modal-form"><label>Target price <input type="number" step="any" min="0" class="alert-modal-price" placeholder="0.00"></label><label>Notify when price is <select class="alert-modal-direction"><option value="above">Above</option><option value="below">Below</option></select></label><button type="button" class="alert-modal-save">Add alert</button></div><button type="button" class="alert-modal-close" aria-label="Close">&times;</button>';
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAlertsModal(); });
+        box.querySelector('.alert-modal-close').addEventListener('click', () => closeAlertsModal());
+        alertModalEl = { overlay, box, tokenLabel: box.querySelector('.alert-modal-token'), list: box.querySelector('.alert-modal-list'), priceInput: box.querySelector('.alert-modal-price'), directionSelect: box.querySelector('.alert-modal-direction'), saveBtn: box.querySelector('.alert-modal-save') };
+        return alertModalEl;
+    }
+
+    function openAlertsModal(tokenAddress, tokenSymbol, currentPrice) {
+        const modal = getOrCreateAlertModal();
+        modal.box.dataset.tokenAddress = tokenAddress;
+        modal.box.dataset.tokenSymbol = tokenSymbol;
+        modal.tokenLabel.textContent = tokenSymbol + (currentPrice != null ? ' · $' + formatPrice(String(currentPrice)) : '');
+        modal.priceInput.value = '';
+        modal.priceInput.placeholder = currentPrice != null ? formatPrice(String(currentPrice)) : '0.00';
+        renderModalAlertsList(tokenAddress);
+        modal.saveBtn.onclick = () => {
+            const targetPrice = parseFloat(modal.priceInput.value);
+            if (Number.isNaN(targetPrice) || targetPrice < 0) {
+                showToast('Enter a valid target price');
+                return;
+            }
+            apiSaveAlert({
+                tokenAddress,
+                tokenSymbol,
+                targetPrice,
+                direction: modal.directionSelect.value,
+            }).then((r) => {
+                if (r.ok) {
+                    alertsCache = r.alerts;
+                    renderModalAlertsList(tokenAddress);
+                    modal.priceInput.value = '';
+                    showToast('Alert added');
+                } else {
+                    showToast(r.error || 'Failed to save');
+                }
+            });
+        };
+        modal.overlay.classList.add('alert-modal-overlay--open');
+        modal.overlay.setAttribute('aria-hidden', 'false');
+        modal.priceInput.focus();
+    }
+
+    function closeAlertsModal() {
+        if (!alertModalEl) return;
+        alertModalEl.overlay.classList.remove('alert-modal-overlay--open');
+        alertModalEl.overlay.setAttribute('aria-hidden', 'true');
+    }
+
+    function renderModalAlertsList(tokenAddress) {
+        const modal = getOrCreateAlertModal();
+        const list = modal.list;
+        list.innerHTML = '';
+        const forToken = (alertsCache || []).filter((a) => a.tokenAddress === tokenAddress);
+        if (forToken.length === 0) {
+            list.innerHTML = '<p class="alert-modal-empty">No alerts for this token.</p>';
+            return;
+        }
+        for (const a of forToken) {
+            const row = document.createElement('div');
+            row.className = 'alert-modal-row';
+            const desc = document.createElement('span');
+            desc.textContent = '$' + formatPrice(String(a.targetPrice)) + ' (' + a.direction + ')' + (a.triggeredAt ? ' · triggered' : '');
+            const delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.className = 'alert-modal-delete';
+            delBtn.textContent = 'Delete';
+            delBtn.addEventListener('click', () => {
+                const addr = alertModalEl && alertModalEl.box.dataset.tokenAddress;
+                apiDeleteAlert(a.id).then((r) => {
+                    if (r.ok) {
+                        alertsCache = r.alerts;
+                        if (addr) renderModalAlertsList(addr);
+                        showToast('Alert removed');
+                    }
+                });
+            });
+            row.append(desc, delBtn);
+            list.appendChild(row);
+        }
+    }
+
+    function getOrCreateHistoryPanel() {
+        if (historyPanelEl) return historyPanelEl;
+        const wrap = document.getElementById('header-history-wrap');
+        if (!wrap) return null;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'history-trigger';
+        btn.title = 'Alert history';
+        btn.setAttribute('aria-label', 'Alert history');
+        btn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"></path><circle cx="12" cy="12" r="10"></circle></svg><span class="history-badge history-badge--hidden">0</span>';
+        const panel = document.createElement('div');
+        panel.className = 'history-panel';
+        panel.innerHTML = '<div class="history-panel-header"><span>Alert history</span><button type="button" class="history-mark-read">Mark all read</button></div><div class="history-panel-list"></div><p class="history-panel-empty">No alerts triggered yet.</p>';
+        wrap.appendChild(btn);
+        wrap.appendChild(panel);
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleHistoryPanel();
+        });
+        panel.querySelector('.history-mark-read').addEventListener('click', () => {
+            apiMarkHistoryRead(null).then((r) => {
+                if (r.ok) {
+                    updateHistoryBadge(r.unreadCount);
+                    renderHistoryPanelList(r.items);
+                }
+            });
+        });
+        document.addEventListener('click', (e) => {
+            if (historyPanelEl && panel.classList.contains('history-panel--open') && !panel.contains(e.target) && !btn.contains(e.target)) {
+                panel.classList.remove('history-panel--open');
+            }
+        });
+        historyPanelEl = { wrap, btn, panel, list: panel.querySelector('.history-panel-list'), empty: panel.querySelector('.history-panel-empty') };
+        return historyPanelEl;
+    }
+
+    function toggleHistoryPanel() {
+        const h = getOrCreateHistoryPanel();
+        if (!h) return;
+        h.panel.classList.toggle('history-panel--open');
+        if (h.panel.classList.contains('history-panel--open')) {
+            apiGetHistory().then((r) => {
+                if (r.ok) {
+                    updateHistoryBadge(r.unreadCount);
+                    renderHistoryPanelList(r.items);
+                }
+            });
+        }
+    }
+
+    function renderHistoryPanelList(items) {
+        const h = historyPanelEl;
+        if (!h) return;
+        h.list.innerHTML = '';
+        const list = Array.isArray(items) ? items : [];
+        h.empty.classList.toggle('history-panel-empty--hidden', list.length > 0);
+        for (const it of list) {
+            const row = document.createElement('div');
+            row.className = 'history-panel-row' + (it.read ? ' history-panel-row--read' : '');
+            const time = new Date(it.triggeredAt * 1000).toLocaleString();
+            row.innerHTML = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">' + escapeHtml(it.direction) + ' $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(time) + '</time>';
+            h.list.appendChild(row);
+        }
+    }
+
+    function escapeHtml(s) {
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
+    }
+
     async function copyAddressToClipboard(address) {
         const ca = typeof address === 'string' ? address.trim() : '';
         if (!ca) {
@@ -288,6 +550,9 @@
         tickerRow.className = 'ticker-row';
         tickerRow.append(tickerEl, copyBtn);
 
+        const socialLinksRow = document.createElement('div');
+        socialLinksRow.className = 'social-links-row';
+
         if (data?.twitterUrl) {
             const twitterBtn = document.createElement('a');
             twitterBtn.href = data.twitterUrl;
@@ -296,11 +561,11 @@
             twitterBtn.className = 'token-twitter-btn';
             twitterBtn.title = 'Open Twitter/X';
             twitterBtn.setAttribute('aria-label', 'Open Twitter/X');
-            twitterBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>';
+            twitterBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>';
             twitterBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
             });
-            tickerRow.appendChild(twitterBtn);
+            socialLinksRow.appendChild(twitterBtn);
         }
 
         const gmgnChain = data?.gmgnChain || 'sol';
@@ -316,7 +581,20 @@
         gmgnBtn.addEventListener('click', (e) => {
             e.stopPropagation();
         });
-        tickerRow.appendChild(gmgnBtn);
+        socialLinksRow.appendChild(gmgnBtn);
+
+        const alertBtn = document.createElement('button');
+        alertBtn.type = 'button';
+        alertBtn.className = 'token-alert-btn';
+        alertBtn.title = 'Price alerts';
+        alertBtn.setAttribute('aria-label', 'Price alerts');
+        alertBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>';
+        alertBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const price = data?.priceUsd != null ? parseFloat(data.priceUsd) : null;
+            openAlertsModal(address, (data?.symbol || '—').toString(), price);
+        });
+        socialLinksRow.appendChild(alertBtn);
 
         const priceEl = document.createElement('div');
         priceEl.className = 'token-price';
@@ -353,7 +631,7 @@
         volEl.append(volLbl, volVal);
         stats.append(fdvEl, mcEl, volEl);
 
-        info.append(logoRow, tickerRow, priceEl, stats);
+        info.append(logoRow, tickerRow, socialLinksRow, priceEl, stats);
         card.append(deleteBtn, info);
 
         const refs = {
@@ -428,19 +706,59 @@
         }
     }
 
+    const DRAG_SCROLL_EDGE = 100;
+    const DRAG_SCROLL_SPEED = 12;
+
     function initSortable(grid) {
         destroySortable();
         const cards = grid.querySelectorAll('.token-card');
         if (!cards.length || typeof Sortable === 'undefined') return;
+
+        let scrollVelocity = 0;
+        let scrollRafId = null;
+        let dragMoveBound = null;
+        let dragScrollActive = false;
+
+        function applyScroll() {
+            if (!dragScrollActive) return;
+            if (scrollVelocity !== 0) {
+                window.scrollBy(0, scrollVelocity);
+            }
+            scrollRafId = requestAnimationFrame(applyScroll);
+        }
+
         sortableInstance = new Sortable(grid, {
             animation: 150,
-            filter: '.token-card-delete, .token-copy-btn, .token-twitter-btn, .token-gmgn-btn',
+            filter: '.token-card-delete, .token-copy-btn, .token-twitter-btn, .token-gmgn-btn, .token-alert-btn',
             ghostClass: 'sortable-ghost',
             onStart(evt) {
                 evt.item.classList.add('token-card--dragging');
+                scrollVelocity = 0;
+                dragScrollActive = true;
+                scrollRafId = requestAnimationFrame(applyScroll);
+                dragMoveBound = (e) => {
+                    const y = e.clientY;
+                    const top = DRAG_SCROLL_EDGE;
+                    const bottom = window.innerHeight - DRAG_SCROLL_EDGE;
+                    if (y < top) {
+                        scrollVelocity = -DRAG_SCROLL_SPEED * (top - y) / top;
+                    } else if (y > bottom) {
+                        scrollVelocity = DRAG_SCROLL_SPEED * (y - bottom) / DRAG_SCROLL_EDGE;
+                    } else {
+                        scrollVelocity = 0;
+                    }
+                };
+                document.addEventListener('mousemove', dragMoveBound);
             },
             onEnd(evt) {
                 evt.item.classList.remove('token-card--dragging');
+                dragScrollActive = false;
+                document.removeEventListener('mousemove', dragMoveBound);
+                scrollVelocity = 0;
+                if (scrollRafId != null) {
+                    cancelAnimationFrame(scrollRafId);
+                    scrollRafId = null;
+                }
                 const ordered = Array.from(grid.querySelectorAll('.token-card')).map((el) => el.dataset.address).filter(Boolean);
                 if (ordered.length === 0) return;
                 apiReorderTokens(ordered).then((res) => {
@@ -503,9 +821,40 @@
                     cardRefs[i].lastPrice = results[i].data?.priceUsd ?? null;
                 }
             }
+            await checkAlerts(results);
         } finally {
             grid.classList.remove('token-grid--updating');
             if (indicator) indicator.classList.remove('update-indicator--active');
+        }
+    }
+
+    async function checkAlerts(results) {
+        const alerts = alertsCache.length ? alertsCache : (await apiGetAlerts()).alerts;
+        if (alerts.length === 0) return;
+        alertsCache = alerts;
+        const activeAlerts = alerts.filter((a) => !a.triggeredAt);
+        if (activeAlerts.length === 0) return;
+        for (const r of results) {
+            const price = r.data?.priceUsd != null ? parseFloat(r.data.priceUsd) : null;
+            if (price == null || Number.isNaN(price)) continue;
+            const symbol = (r.data?.symbol || '—').toString();
+            for (const a of activeAlerts) {
+                if (a.tokenAddress !== r.address) continue;
+                const target = Number(a.targetPrice);
+                if (Number.isNaN(target)) continue;
+                const crossed = a.direction === 'above' ? price >= target : price <= target;
+                if (!crossed) continue;
+                const addRes = await apiAddHistory({
+                    tokenAddress: a.tokenAddress,
+                    tokenSymbol: a.tokenSymbol || symbol,
+                    targetPrice: target,
+                    actualPrice: price,
+                    direction: a.direction,
+                });
+                if (addRes.ok && addRes.unreadCount != null) updateHistoryBadge(addRes.unreadCount);
+                await apiMarkAlertTriggered(a.id);
+                alertsCache = (await apiGetAlerts()).alerts;
+            }
         }
     }
 
@@ -643,6 +992,15 @@
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') addToken(input.value);
             });
+        }
+
+        const alertsRes = await apiGetAlerts();
+        if (alertsRes.ok) alertsCache = alertsRes.alerts;
+        const historyRes = await apiGetHistory();
+        if (historyRes.ok) {
+            historyUnreadCount = historyRes.unreadCount;
+            getOrCreateHistoryPanel();
+            updateHistoryBadge(historyRes.unreadCount);
         }
     }
 

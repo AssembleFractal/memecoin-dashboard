@@ -20,6 +20,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
+$action = isset($_GET['action']) ? trim($_GET['action']) : '';
+
+$alertsPath = __DIR__ . '/alerts.json';
+$historyPath = __DIR__ . '/history.json';
+
+function loadJson($path, $default) {
+    if (!file_exists($path)) {
+        return $default;
+    }
+    $raw = @file_get_contents($path);
+    $data = $raw ? json_decode($raw, true) : null;
+    return is_array($data) ? $data : $default;
+}
+
+function saveJson($path, $data) {
+    return @file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT)) !== false;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'getAlerts') {
+    $data = loadJson($alertsPath, ['alerts' => []]);
+    echo json_encode(['ok' => true, 'alerts' => isset($data['alerts']) ? $data['alerts'] : []]);
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(['ok' => false, 'error' => 'Method not allowed']);
@@ -73,9 +97,9 @@ function saveConfig($path, $data) {
     return @file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT)) !== false;
 }
 
-$action = isset($_GET['action']) ? trim($_GET['action']) : '';
 $token  = isset($_GET['token'])  ? trim($_GET['token'])  : '';
 $order  = isset($_GET['order'])  ? trim($_GET['order'])  : '';
+$input  = json_decode(file_get_contents('php://input') ?: '{}', true) ?: [];
 
 $config = loadConfig($configPath);
 $tokens = &$config['tokens'];
@@ -109,6 +133,137 @@ if ($action === 'reorder') {
         exit;
     }
     echo json_encode(['ok' => true, 'tokens' => loadConfig($configPath)['tokens']]);
+    exit;
+}
+
+if ($action === 'saveAlert') {
+    $addr = isset($input['tokenAddress']) ? trim($input['tokenAddress']) : '';
+    $symbol = isset($input['tokenSymbol']) ? trim($input['tokenSymbol']) : '—';
+    $targetPrice = isset($input['targetPrice']) ? (float) $input['targetPrice'] : 0;
+    $direction = isset($input['direction']) && in_array($input['direction'], ['above', 'below'], true) ? $input['direction'] : 'above';
+    if ($addr === '' || strlen($addr) < 20) {
+        echo json_encode(['ok' => false, 'error' => 'Invalid token address']);
+        exit;
+    }
+    $data = loadJson($alertsPath, ['alerts' => []]);
+    $alerts = isset($data['alerts']) ? $data['alerts'] : [];
+    $id = bin2hex(random_bytes(8));
+    $alerts[] = [
+        'id' => $id,
+        'tokenAddress' => $addr,
+        'tokenSymbol' => $symbol,
+        'targetPrice' => $targetPrice,
+        'direction' => $direction,
+        'createdAt' => time(),
+        'triggeredAt' => null,
+    ];
+    $data['alerts'] = $alerts;
+    if (!saveJson($alertsPath, $data)) {
+        echo json_encode(['ok' => false, 'error' => 'Failed to save']);
+        exit;
+    }
+    echo json_encode(['ok' => true, 'alerts' => $data['alerts']]);
+    exit;
+}
+
+if ($action === 'deleteAlert') {
+    $alertId = isset($input['alertId']) ? trim($input['alertId']) : '';
+    if ($alertId === '') {
+        echo json_encode(['ok' => false, 'error' => 'Missing alertId']);
+        exit;
+    }
+    $data = loadJson($alertsPath, ['alerts' => []]);
+    $alerts = isset($data['alerts']) ? $data['alerts'] : [];
+    $data['alerts'] = array_values(array_filter($alerts, function ($a) use ($alertId) {
+        return isset($a['id']) && $a['id'] !== $alertId;
+    }));
+    if (!saveJson($alertsPath, $data)) {
+        echo json_encode(['ok' => false, 'error' => 'Failed to save']);
+        exit;
+    }
+    echo json_encode(['ok' => true, 'alerts' => $data['alerts']]);
+    exit;
+}
+
+if ($action === 'addHistory') {
+    $item = [
+        'id' => bin2hex(random_bytes(8)),
+        'tokenAddress' => isset($input['tokenAddress']) ? trim($input['tokenAddress']) : '',
+        'tokenSymbol' => isset($input['tokenSymbol']) ? trim($input['tokenSymbol']) : '—',
+        'targetPrice' => isset($input['targetPrice']) ? (float) $input['targetPrice'] : 0,
+        'actualPrice' => isset($input['actualPrice']) ? (float) $input['actualPrice'] : 0,
+        'direction' => isset($input['direction']) && in_array($input['direction'], ['above', 'below'], true) ? $input['direction'] : 'above',
+        'triggeredAt' => time(),
+        'read' => false,
+    ];
+    $data = loadJson($historyPath, ['items' => [], 'unreadCount' => 0]);
+    $items = isset($data['items']) ? $data['items'] : [];
+    array_unshift($items, $item);
+    $data['items'] = array_slice($items, 0, 500);
+    $data['unreadCount'] = (isset($data['unreadCount']) ? (int) $data['unreadCount'] : 0) + 1;
+    if (!saveJson($historyPath, $data)) {
+        echo json_encode(['ok' => false, 'error' => 'Failed to save']);
+        exit;
+    }
+    echo json_encode(['ok' => true, 'items' => $data['items'], 'unreadCount' => $data['unreadCount']]);
+    exit;
+}
+
+if ($action === 'markHistoryRead') {
+    $data = loadJson($historyPath, ['items' => [], 'unreadCount' => 0]);
+    $items = isset($data['items']) ? $data['items'] : [];
+    $id = isset($input['id']) ? trim($input['id']) : null;
+    if ($id) {
+        foreach ($items as &$it) {
+            if (isset($it['id']) && $it['id'] === $id) {
+                $it['read'] = true;
+                $data['unreadCount'] = max(0, (isset($data['unreadCount']) ? (int) $data['unreadCount'] : 0) - 1);
+                break;
+            }
+        }
+    } else {
+        foreach ($items as &$it) {
+            $it['read'] = true;
+        }
+        $data['unreadCount'] = 0;
+    }
+    $data['items'] = $items;
+    if (!saveJson($historyPath, $data)) {
+        echo json_encode(['ok' => false, 'error' => 'Failed to save']);
+        exit;
+    }
+    echo json_encode(['ok' => true, 'items' => $data['items'], 'unreadCount' => $data['unreadCount']]);
+    exit;
+}
+
+if ($action === 'getHistory') {
+    $data = loadJson($historyPath, ['items' => [], 'unreadCount' => 0]);
+    $items = isset($data['items']) ? $data['items'] : [];
+    $unreadCount = isset($data['unreadCount']) ? (int) $data['unreadCount'] : 0;
+    echo json_encode(['ok' => true, 'items' => $items, 'unreadCount' => $unreadCount]);
+    exit;
+}
+
+if ($action === 'markAlertTriggered') {
+    $alertId = isset($input['alertId']) ? trim($input['alertId']) : '';
+    if ($alertId === '') {
+        echo json_encode(['ok' => false, 'error' => 'Missing alertId']);
+        exit;
+    }
+    $data = loadJson($alertsPath, ['alerts' => []]);
+    $alerts = isset($data['alerts']) ? $data['alerts'] : [];
+    foreach ($alerts as &$a) {
+        if (isset($a['id']) && $a['id'] === $alertId) {
+            $a['triggeredAt'] = time();
+            break;
+        }
+    }
+    $data['alerts'] = $alerts;
+    if (!saveJson($alertsPath, $data)) {
+        echo json_encode(['ok' => false, 'error' => 'Failed to save']);
+        exit;
+    }
+    echo json_encode(['ok' => true, 'alerts' => $data['alerts']]);
     exit;
 }
 
