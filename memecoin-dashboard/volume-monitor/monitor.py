@@ -1,9 +1,10 @@
 """
 Volume monitor: reads config.json tokens, checks DexScreener 5m volume every 5 min.
-When 5m Vol >= 100k: sends Telegram alert and POSTs to dashboard addHistory (1h cooldown per token).
+When 5m Vol >= 100k AND 2x+ vs previous 5m: sends Telegram alert and POSTs to dashboard addHistory.
 """
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -16,8 +17,14 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens"
 INTERVAL_SEC = 300  # 5 min
 VOL_SPIKE_THRESHOLD = 100_000
-COOLDOWN_SEC = 3600  # 1 hour per token
-LAST_TRIGGERED: dict[str, float] = {}  # address -> timestamp
+PREV_VOL_5M: dict[str, float] = {}
+
+# MarkdownV2 예약문자: \ _ * [ ] ( ) ~ ` > # + - = | { } . !
+_MD2_ESCAPE_RE = re.compile(r"([_*\[\]()~`>#+=|{}.!\-\\])")
+
+
+def _escape_md2(s: str) -> str:
+    return _MD2_ESCAPE_RE.sub(r"\\\1", s)
 
 
 def load_tokens() -> list[str]:
@@ -83,14 +90,17 @@ def get_volume5m_and_symbol(pair: dict) -> tuple[float | None, str, float | None
     return v5, symbol, mcap_f
 
 
-def send_telegram(message: str) -> bool:
+def send_telegram(message: str, parse_mode: str | None = None) -> bool:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": message, "disable_web_page_preview": True}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     try:
-        r = httpx.post(url, json={"chat_id": chat_id, "text": message, "disable_web_page_preview": True}, timeout=10)
+        r = httpx.post(url, json=payload, timeout=10)
         return r.status_code == 200
     except Exception:
         return False
@@ -125,29 +135,33 @@ def main():
             if not pair:
                 continue
             vol5m, symbol, mcap = get_volume5m_and_symbol(pair)
+            prev_vol = PREV_VOL_5M.get(address)
+            if vol5m is not None:
+                PREV_VOL_5M[address] = vol5m
             if vol5m is None or vol5m < VOL_SPIKE_THRESHOLD:
                 continue
-            now = time.time()
-            last = LAST_TRIGGERED.get(address)
-            if last is not None and (now - last) < COOLDOWN_SEC:
+            if prev_vol is None or prev_vol <= 0:
                 continue
-            LAST_TRIGGERED[address] = now
+            if vol5m < prev_vol * 2:
+                continue
             print(f"SPIKE detected: {symbol} | 5m vol: {vol5m}")
+            increase_pct = round(((vol5m / prev_vol) - 1) * 100)
             mcap_str = format_vol(mcap) if mcap is not None else "—"
             vol_str = format_vol(vol5m)
             msg = (
-                f"⚡${symbol} 5m Volume Spike\n"
-                f"MC: ${mcap_str}\n"
-                f"5m Vol: ${vol_str}"
+                "*" + _escape_md2(f"${symbol} 5m Volume Spike") + "*"
+                + "\n\n"
+                + _escape_md2(f"MC: ${mcap_str}") + "\n"
+                + _escape_md2(f"5m Vol: ${vol_str} ({increase_pct}%)")
             )
-            result = send_telegram(msg)
+            result = send_telegram(msg, parse_mode="MarkdownV2")
             print(f"Telegram sent: {result}")
             price = 0.0
             try:
                 price = float(pair.get("priceUsd") or 0)
             except (TypeError, ValueError):
                 pass
-            note = f"5m Vol Spike ${vol_str} MC"
+            note = f"5m Vol Spike ${vol_str} ({increase_pct}%) MC"
             add_history(address, symbol, price, note)
         time.sleep(INTERVAL_SEC)
 

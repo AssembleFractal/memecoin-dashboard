@@ -251,6 +251,7 @@
 
     let alertModalEl = null;
     let historyPanelEl = null;
+    let historyPollInProgress = false;
 
     function getOrCreateAlertModal() {
         if (alertModalEl) return alertModalEl;
@@ -402,6 +403,24 @@
                 }
             });
         }
+    }
+
+    function pollHistoryUnread() {
+        if (historyPollInProgress) return;
+        historyPollInProgress = true;
+        apiGetHistory()
+            .then((r) => {
+                if (r && typeof r.unreadCount === 'number') updateHistoryBadge(r.unreadCount);
+                if (historyPanelEl && historyPanelEl.panel.classList.contains('history-panel--open') && r && r.ok) {
+                    renderHistoryPanelList(r.items);
+                }
+            })
+            .catch((e) => {
+                console.warn('pollHistoryUnread failed', e);
+            })
+            .finally(() => {
+                historyPollInProgress = false;
+            });
     }
 
     function formatKST(timestamp) {
@@ -905,6 +924,7 @@
             } catch (e) {
                 console.error('updateAllTokens failed', e);
             }
+            pollHistoryUnread();
         }, UPDATE_INTERVAL);
     }
 
@@ -1137,6 +1157,41 @@
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') addToken(input.value);
             });
+            (function setupClipboardPasteOnFocus() {
+                let pasteInProgress = false;
+                function tryPasteFromClipboard() {
+                    if (pasteInProgress) return;
+                    pasteInProgress = true;
+                    navigator.clipboard.readText().then((raw) => {
+                        const text = typeof raw === 'string' ? raw.trim() : '';
+                        if (!text) {
+                            pasteInProgress = false;
+                            return;
+                        }
+                        const len = text.length;
+                        if (len < 20 || len > 66) {
+                            pasteInProgress = false;
+                            return;
+                        }
+                        const val = input.value || '';
+                        const start = input.selectionStart ?? 0;
+                        const end = input.selectionEnd ?? 0;
+                        const fullSelection = val.length > 0 && start === 0 && end === val.length;
+                        if (val.length > 0 && !fullSelection) {
+                            pasteInProgress = false;
+                            return;
+                        }
+                        input.value = text;
+                        input.setSelectionRange(text.length, text.length);
+                        pasteInProgress = false;
+                    }).catch(() => {
+                        showToast('Click then press Ctrl+V (clipboard permission blocked)');
+                        pasteInProgress = false;
+                    });
+                }
+                input.addEventListener('click', tryPasteFromClipboard);
+                input.addEventListener('focus', tryPasteFromClipboard);
+            })();
         }
 
         const alertsRes = await apiGetAlerts();
