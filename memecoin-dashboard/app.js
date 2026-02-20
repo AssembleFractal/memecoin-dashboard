@@ -426,8 +426,17 @@
             const row = document.createElement('div');
             row.className = 'history-panel-row' + (it.read ? ' history-panel-row--read' : '');
             const timeStr = formatKST(it.triggeredAt);
-            const direction = it.actualPrice >= it.targetPrice ? 'above' : 'below';
-            row.innerHTML = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">' + escapeHtml(direction) + ' $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
+            const isVolumeSpike = (it.type || '') === 'volume_spike';
+            let contentHtml;
+            if (isVolumeSpike) {
+                const symbol = (it.tokenSymbol || '—').toString().toUpperCase();
+                const note = (it.note || '').toString();
+                contentHtml = '<span class="history-panel-symbol">' + escapeHtml(symbol) + '</span> <span class="history-panel-detail">' + escapeHtml(note) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
+            } else {
+                const direction = it.actualPrice >= it.targetPrice ? 'above' : 'below';
+                contentHtml = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">' + escapeHtml(direction) + ' $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
+            }
+            row.innerHTML = contentHtml;
             const deleteBtn = row.querySelector('.history-item-delete');
             deleteBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -536,7 +545,8 @@
         const marketCap = pair.marketCap != null && !Number.isNaN(Number(pair.marketCap)) ? Number(pair.marketCap) : null;
         const fdv = pair.fdv != null && !Number.isNaN(Number(pair.fdv)) ? Number(pair.fdv) : null;
         const volume24h = pair.volume?.h24 != null && !Number.isNaN(Number(pair.volume.h24)) ? Number(pair.volume.h24) : null;
-        
+        const volume5m = pair.volume?.m5 != null && !Number.isNaN(Number(pair.volume.m5)) ? Number(pair.volume.m5) : null;
+
         let twitterUrl = null;
         const socials = base.info?.socials || pair.info?.socials;
         if (Array.isArray(socials)) {
@@ -548,7 +558,7 @@
         const GMGN_CHAIN_MAP = { solana: 'sol', base: 'base', bsc: 'bsc', ethereum: 'eth', arbitrum: 'arb', polygon: 'polygon', avalanche: 'avax' };
         const gmgnChain = GMGN_CHAIN_MAP[chainId] || chainId || 'sol';
 
-        return { name, symbol, imageUrl, priceUsd, marketCap, fdv, volume24h, twitterUrl, chainId, gmgnChain, pair };
+        return { name, symbol, imageUrl, priceUsd, marketCap, fdv, volume24h, volume5m, twitterUrl, chainId, gmgnChain, pair };
     }
 
     async function fetchTokenData(address) {
@@ -792,6 +802,8 @@
                 address: item.address,
                 refs: out.refs,
                 lastPrice: item.data?.priceUsd ?? null,
+                lastVolume5m: item.data?.volume5m ?? null,
+                spikeTimeoutId: null,
             });
             fragment.appendChild(out.card);
         }
@@ -915,10 +927,25 @@
                     return { address, data, error };
                 })
             );
+            const SPIKE_REMOVE_MS = 900000; // 15 min
             for (let i = 0; i < results.length && i < cardRefs.length; i++) {
-                if (cardRefs[i].address === results[i].address) {
-                    updateCardContent(cardRefs[i].refs, results[i], cardRefs[i].lastPrice);
-                    cardRefs[i].lastPrice = results[i].data?.priceUsd ?? null;
+                if (cardRefs[i].address !== results[i].address) continue;
+                const ref = cardRefs[i];
+                updateCardContent(ref.refs, results[i], ref.lastPrice);
+                ref.lastPrice = results[i].data?.priceUsd ?? null;
+                const vol5m = results[i].data?.volume5m;
+                const prevVol5m = ref.lastVolume5m;
+                ref.lastVolume5m = vol5m ?? ref.lastVolume5m;
+                const card = ref.refs?.card;
+                if (card && vol5m != null && prevVol5m != null && prevVol5m > 0 && vol5m >= 2 * prevVol5m) {
+                    if (!card.classList.contains('token-card--spike')) {
+                        card.classList.add('token-card--spike');
+                        if (ref.spikeTimeoutId != null) clearTimeout(ref.spikeTimeoutId);
+                        ref.spikeTimeoutId = setTimeout(() => {
+                            card.classList.remove('token-card--spike');
+                            ref.spikeTimeoutId = null;
+                        }, SPIKE_REMOVE_MS);
+                    }
                 }
             }
             await checkAlerts(results);

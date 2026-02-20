@@ -205,6 +205,8 @@ if ($action === 'addHistory') {
         'actualPrice' => isset($input['actualPrice']) ? (float) $input['actualPrice'] : 0,
         'triggeredAt' => $triggeredAt,
         'read' => false,
+        'type' => isset($input['type']) ? trim($input['type']) : '',
+        'note' => isset($input['note']) ? trim($input['note']) : '',
     ];
     $data = loadJson($historyPath, ['items' => [], 'unreadCount' => 0]);
     $items = isset($data['items']) ? $data['items'] : [];
