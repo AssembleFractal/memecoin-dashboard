@@ -804,6 +804,7 @@
                 lastPrice: item.data?.priceUsd ?? null,
                 lastVolume5m: item.data?.volume5m ?? null,
                 spikeTimeoutId: null,
+                spikeCooldownUntil: null,
             });
             fragment.appendChild(out.card);
         }
@@ -935,11 +936,21 @@
                 ref.lastPrice = results[i].data?.priceUsd ?? null;
                 const vol5m = results[i].data?.volume5m;
                 const prevVol5m = ref.lastVolume5m;
+                // 첫 값 저장만 하고 비교하지 않음 (lastVolume5m이 null이면 스파이크 체크 스킵)
+                if (prevVol5m == null || prevVol5m === undefined) {
+                    ref.lastVolume5m = vol5m ?? ref.lastVolume5m;
+                    continue;
+                }
                 ref.lastVolume5m = vol5m ?? ref.lastVolume5m;
+                // 스파이크 감지 후 15분 쿨다운: 해당 토큰은 재감지 안 함
+                if (ref.spikeCooldownUntil != null && Date.now() < ref.spikeCooldownUntil) {
+                    continue;
+                }
                 const card = ref.refs?.card;
                 if (card && vol5m != null && prevVol5m != null && prevVol5m > 0 && vol5m >= 2 * prevVol5m) {
                     if (!card.classList.contains('token-card--spike')) {
                         card.classList.add('token-card--spike');
+                        ref.spikeCooldownUntil = Date.now() + SPIKE_REMOVE_MS;
                         if (ref.spikeTimeoutId != null) clearTimeout(ref.spikeTimeoutId);
                         ref.spikeTimeoutId = setTimeout(() => {
                             card.classList.remove('token-card--spike');

@@ -114,6 +114,7 @@ def add_history(address: str, symbol: str, actual_price: float, note: str) -> bo
 
 
 def main():
+    print("Monitor started")
     while True:
         addresses = [a for a in load_tokens() if a and len(a) >= 20]
         for address in addresses:
@@ -124,11 +125,13 @@ def main():
             if vol5m is None or vol5m <= 0:
                 continue
             prev = PREV_VOLUME.get(address)
+            print(f"Checking {symbol} | 5m vol: {vol5m} | prev: {prev}")
             PREV_VOLUME[address] = vol5m
             if prev is None or prev <= 0:
                 continue
             if vol5m < 2 * prev:
                 continue
+            print(f"SPIKE detected: {symbol}")
             pct = ((vol5m / prev) - 1) * 100 if prev else 0
             mcap_str = format_vol(mcap) if mcap is not None else "—"
             vol_str = format_vol(vol5m)
@@ -137,7 +140,8 @@ def main():
                 f"Mcap: ${mcap_str}\n"
                 f"5m Vol: ${vol_str} (+{pct:.0f}%)"
             )
-            send_telegram(msg)
+            result = send_telegram(msg)
+            print(f"Telegram sent: {result}")
             price = 0.0
             try:
                 price = float(pair.get("priceUsd") or 0)
