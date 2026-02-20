@@ -802,9 +802,8 @@
                 address: item.address,
                 refs: out.refs,
                 lastPrice: item.data?.priceUsd ?? null,
-                lastVolume5m: item.data?.volume5m ?? null,
                 spikeTimeoutId: null,
-                spikeCooldownUntil: null,
+                spikeLastTriggered: null,
             });
             fragment.appendChild(out.card);
         }
@@ -895,6 +894,9 @@
         cardRefs = [];
     }
 
+    const SPIKE_COOLDOWN_MS = 3600000; // 1시간
+    const SPIKE_REMOVE_MS = 900000;   // 15 min (카드 글로우 제거)
+
     function startUpdateTimer() {
         stopUpdateTimer();
         updateTimer = setInterval(async () => {
@@ -928,29 +930,19 @@
                     return { address, data, error };
                 })
             );
-            const SPIKE_REMOVE_MS = 900000; // 15 min
             for (let i = 0; i < results.length && i < cardRefs.length; i++) {
                 if (cardRefs[i].address !== results[i].address) continue;
                 const ref = cardRefs[i];
                 updateCardContent(ref.refs, results[i], ref.lastPrice);
                 ref.lastPrice = results[i].data?.priceUsd ?? null;
-                const vol5m = results[i].data?.volume5m;
-                const prevVol5m = ref.lastVolume5m;
-                // 첫 값 저장만 하고 비교하지 않음 (lastVolume5m이 null이면 스파이크 체크 스킵)
-                if (prevVol5m == null || prevVol5m === undefined) {
-                    ref.lastVolume5m = vol5m ?? ref.lastVolume5m;
-                    continue;
-                }
-                ref.lastVolume5m = vol5m ?? ref.lastVolume5m;
-                // 스파이크 감지 후 15분 쿨다운: 해당 토큰은 재감지 안 함
-                if (ref.spikeCooldownUntil != null && Date.now() < ref.spikeCooldownUntil) {
-                    continue;
-                }
-                const card = ref.refs?.card;
-                if (card && vol5m != null && prevVol5m != null && prevVol5m > 0 && vol5m >= 2 * prevVol5m) {
-                    if (!card.classList.contains('token-card--spike')) {
+                const vol5m = results[i].data?.volume5m != null ? Number(results[i].data.volume5m) : null;
+                if (vol5m != null && vol5m >= 100000) {
+                    const now = Date.now();
+                    if (ref.spikeLastTriggered != null && now - ref.spikeLastTriggered < SPIKE_COOLDOWN_MS) continue;
+                    ref.spikeLastTriggered = now;
+                    const card = ref.refs?.card;
+                    if (card && !card.classList.contains('token-card--spike')) {
                         card.classList.add('token-card--spike');
-                        ref.spikeCooldownUntil = Date.now() + SPIKE_REMOVE_MS;
                         if (ref.spikeTimeoutId != null) clearTimeout(ref.spikeTimeoutId);
                         ref.spikeTimeoutId = setTimeout(() => {
                             card.classList.remove('token-card--spike');

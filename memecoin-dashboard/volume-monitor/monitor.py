@@ -1,6 +1,6 @@
 """
 Volume monitor: reads config.json tokens, checks DexScreener 5m volume every 5 min.
-On 2x+ spike: sends Telegram alert and POSTs to dashboard addHistory.
+When 5m Vol >= 100k: sends Telegram alert and POSTs to dashboard addHistory (1h cooldown per token).
 """
 import json
 import os
@@ -15,7 +15,9 @@ load_dotenv()
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens"
 INTERVAL_SEC = 300  # 5 min
-PREV_VOLUME: dict[str, float] = {}
+VOL_SPIKE_THRESHOLD = 100_000
+COOLDOWN_SEC = 3600  # 1 hour per token
+LAST_TRIGGERED: dict[str, float] = {}  # address -> timestamp
 
 
 def load_tokens() -> list[str]:
@@ -28,6 +30,7 @@ def load_tokens() -> list[str]:
 
 
 def format_vol(value: float) -> str:
+    """k/m/b 소수점 한 자리. 1000 미만은 그대로."""
     if value is None or value != value:  # NaN
         return "0"
     if value < 0:
@@ -38,7 +41,7 @@ def format_vol(value: float) -> str:
         return f"{(value / 1e6):.1f}m"
     if value >= 1e3:
         return f"{(value / 1e3):.1f}k"
-    return f"{value:.1f}"
+    return str(int(round(value)))
 
 
 def fetch_pair(address: str) -> dict | None:
@@ -122,23 +125,20 @@ def main():
             if not pair:
                 continue
             vol5m, symbol, mcap = get_volume5m_and_symbol(pair)
-            if vol5m is None or vol5m <= 0:
+            if vol5m is None or vol5m < VOL_SPIKE_THRESHOLD:
                 continue
-            prev = PREV_VOLUME.get(address)
-            print(f"Checking {symbol} | 5m vol: {vol5m} | prev: {prev}")
-            PREV_VOLUME[address] = vol5m
-            if prev is None or prev <= 0:
+            now = time.time()
+            last = LAST_TRIGGERED.get(address)
+            if last is not None and (now - last) < COOLDOWN_SEC:
                 continue
-            if vol5m < 2 * prev:
-                continue
-            print(f"SPIKE detected: {symbol}")
-            pct = ((vol5m / prev) - 1) * 100 if prev else 0
+            LAST_TRIGGERED[address] = now
+            print(f"SPIKE detected: {symbol} | 5m vol: {vol5m}")
             mcap_str = format_vol(mcap) if mcap is not None else "—"
             vol_str = format_vol(vol5m)
             msg = (
                 f"⚡${symbol} 5m Volume Spike\n"
-                f"Mcap: ${mcap_str}\n"
-                f"5m Vol: ${vol_str} (+{pct:.0f}%)"
+                f"MC: ${mcap_str}\n"
+                f"5m Vol: ${vol_str}"
             )
             result = send_telegram(msg)
             print(f"Telegram sent: {result}")
@@ -147,7 +147,8 @@ def main():
                 price = float(pair.get("priceUsd") or 0)
             except (TypeError, ValueError):
                 pass
-            add_history(address, symbol, price, f"5m Vol Spike +{pct:.0f}%")
+            note = f"5m Vol Spike ${vol_str} MC"
+            add_history(address, symbol, price, note)
         time.sleep(INTERVAL_SEC)
 
 
