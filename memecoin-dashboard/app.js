@@ -405,12 +405,41 @@
         }
     }
 
+    function applySpikeHighlightsFromHistory(items) {
+        if (!Array.isArray(items) || !cardRefs.length) return;
+        const nowMs = Date.now();
+        const addressSet = new Set();
+        const symbolToAddress = new Map();
+        for (const ref of cardRefs) {
+            const s = ref.refs?.tickerEl?.textContent?.trim().toUpperCase();
+            if (s) symbolToAddress.set(s, ref.address);
+        }
+        for (const it of items) {
+            const isSpike = (it.type || '') === 'volume_spike' || (typeof (it.note || '') === 'string' && it.note.includes('5m Vol Spike'));
+            if (!isSpike) continue;
+            const eventTsMs = (it.triggeredAt != null ? Number(it.triggeredAt) : 0) * 1000;
+            if (nowMs - eventTsMs > SPIKE_HIGHLIGHT_WINDOW_MS) continue;
+            const addr = it.tokenAddress || it.address;
+            if (addr) {
+                addressSet.add(addr);
+            } else if (it.tokenSymbol) {
+                const a = symbolToAddress.get(String(it.tokenSymbol).trim().toUpperCase());
+                if (a) addressSet.add(a);
+            }
+        }
+        for (const ref of cardRefs) {
+            const card = ref.refs?.card;
+            if (card) card.classList.toggle('token-card--spike', addressSet.has(ref.address));
+        }
+    }
+
     function pollHistoryUnread() {
         if (historyPollInProgress) return;
         historyPollInProgress = true;
         apiGetHistory()
             .then((r) => {
                 if (r && typeof r.unreadCount === 'number') updateHistoryBadge(r.unreadCount);
+                if (r && r.ok && Array.isArray(r.items)) applySpikeHighlightsFromHistory(r.items);
                 if (historyPanelEl && historyPanelEl.panel.classList.contains('history-panel--open') && r && r.ok) {
                     renderHistoryPanelList(r.items);
                 }
@@ -821,8 +850,6 @@
                 address: item.address,
                 refs: out.refs,
                 lastPrice: item.data?.priceUsd ?? null,
-                spikeTimeoutId: null,
-                spikeLastTriggered: null,
             });
             fragment.appendChild(out.card);
         }
@@ -913,8 +940,7 @@
         cardRefs = [];
     }
 
-    const SPIKE_COOLDOWN_MS = 3600000; // 1시간
-    const SPIKE_REMOVE_MS = 900000;   // 15 min (카드 글로우 제거)
+    const SPIKE_HIGHLIGHT_WINDOW_MS = 15 * 60 * 1000; // 15분 (서버 히스토리 기준 테두리 유지)
 
     function startUpdateTimer() {
         stopUpdateTimer();
@@ -955,21 +981,6 @@
                 const ref = cardRefs[i];
                 updateCardContent(ref.refs, results[i], ref.lastPrice);
                 ref.lastPrice = results[i].data?.priceUsd ?? null;
-                const vol5m = results[i].data?.volume5m != null ? Number(results[i].data.volume5m) : null;
-                if (vol5m != null && vol5m >= 100000) {
-                    const now = Date.now();
-                    if (ref.spikeLastTriggered != null && now - ref.spikeLastTriggered < SPIKE_COOLDOWN_MS) continue;
-                    ref.spikeLastTriggered = now;
-                    const card = ref.refs?.card;
-                    if (card && !card.classList.contains('token-card--spike')) {
-                        card.classList.add('token-card--spike');
-                        if (ref.spikeTimeoutId != null) clearTimeout(ref.spikeTimeoutId);
-                        ref.spikeTimeoutId = setTimeout(() => {
-                            card.classList.remove('token-card--spike');
-                            ref.spikeTimeoutId = null;
-                        }, SPIKE_REMOVE_MS);
-                    }
-                }
             }
             await checkAlerts(results);
         } finally {
@@ -1201,6 +1212,7 @@
             historyUnreadCount = historyRes.unreadCount;
             getOrCreateHistoryPanel();
             updateHistoryBadge(historyRes.unreadCount);
+            if (Array.isArray(historyRes.items)) applySpikeHighlightsFromHistory(historyRes.items);
         }
     }
 
