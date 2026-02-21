@@ -488,17 +488,12 @@
             let contentHtml;
             if (isVolumeSpike) {
                 const symbol = (it.tokenSymbol || '—').toString().toUpperCase();
-                // note에서 "MC" 접미사 제거 후 볼륨 스파이크 라인 추출
                 const rawNote = (it.note || '').toString();
-                const spikeLine = rawNote.replace(/\s*MC\s*$/, '').trim();
-                // marketCap: 저장된 필드 우선, 없으면 note 파싱 fallback
+                // 구버전 note에 남아있는 " MC" 접미사 제거
+                const spikeLine = rawNote.replace(/\s+MC\s*$/, '').trim();
                 let mcLine = '';
                 if (it.marketCap != null && Number.isFinite(Number(it.marketCap))) {
                     mcLine = 'MC: $' + formatDexScreener(Number(it.marketCap));
-                } else {
-                    // note 끝의 "MC" 앞에 있는 금액 파싱 시도
-                    const mcMatch = rawNote.match(/\$[\d.]+[kmb]?\s+MC\s*$/i);
-                    if (mcMatch) mcLine = 'MC: ' + mcMatch[0].replace(/\s*MC\s*$/i, '').trim();
                 }
                 contentHtml = '<span class="history-panel-symbol">' + escapeHtml(symbol) + '</span>'
                     + '<span class="history-panel-detail">' + escapeHtml(spikeLine) + '</span>'

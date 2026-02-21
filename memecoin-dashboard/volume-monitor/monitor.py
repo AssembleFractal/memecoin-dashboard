@@ -106,7 +106,7 @@ def send_telegram(message: str, parse_mode: str | None = None) -> bool:
         return False
 
 
-def add_history(address: str, symbol: str, actual_price: float, note: str) -> bool:
+def add_history(address: str, symbol: str, actual_price: float, note: str, market_cap: float | None = None) -> bool:
     base_url = (os.getenv("DASHBOARD_URL") or "").rstrip("/")
     if not base_url:
         return False
@@ -119,6 +119,8 @@ def add_history(address: str, symbol: str, actual_price: float, note: str) -> bo
         "type": "volume_spike",
         "note": note,
     }
+    if market_cap is not None:
+        payload["marketCap"] = market_cap
     try:
         r = httpx.post(f"{url}?action=addHistory", json=payload, timeout=10)
         return r.status_code == 200 and (r.json() or {}).get("ok") is True
@@ -179,8 +181,8 @@ def main():
                 price = float(pair.get("priceUsd") or 0)
             except (TypeError, ValueError):
                 pass
-            note = f"5m Vol Spike ${vol_str}{pct_str} MC"
-            add_history(address, symbol, price, note)
+            note = f"5m Vol Spike ${vol_str}{pct_str}"
+            add_history(address, symbol, price, note, market_cap=mcap)
         time.sleep(INTERVAL_SEC)
 
 
