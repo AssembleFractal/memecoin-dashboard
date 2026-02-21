@@ -641,29 +641,30 @@
         return { name, symbol, imageUrl, priceUsd, marketCap, fdv, volume24h, volume1h, volume5m, twitterUrl, chainId, gmgnChain, pair };
     }
 
-    async function fetchTokenData(address) {
-        const url = `${API_URL}?action=dex&address=${encodeURIComponent(address)}&_t=${Date.now()}`;
+    async function _fetchDexScreenerOnce(address) {
+        const url = `${DEXSCREENER_API}/${encodeURIComponent(address)}?t=${Date.now()}`;
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
+        const tid = setTimeout(() => controller.abort(), 5000);
         try {
             const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
-            clearTimeout(timeout);
+            clearTimeout(tid);
             if (!res.ok) return { data: null, error: `HTTP ${res.status}` };
             let json;
-            try {
-                const raw = await res.text();
-                json = JSON.parse(raw);
-            } catch (e) {
-                return { data: null, error: 'JSON parse failed' };
-            }
-            if (json?.error) return { data: null, error: null }; // proxy error → show last good data
+            try { json = JSON.parse(await res.text()); } catch { return { data: null, error: 'parse' }; }
             const data = parseDexScreenerResponse(json);
-            if (!data) return { data: null, error: null }; // no pairs → keep last good data
-            return { data, error: null };
+            return data ? { data, error: null } : { data: null, error: null };
         } catch (e) {
-            clearTimeout(timeout);
-            return { data: null, error: e?.name === 'AbortError' ? 'Timeout' : (e?.message || 'Request failed') };
+            clearTimeout(tid);
+            return { data: null, error: e?.name === 'AbortError' ? 'timeout' : (e?.message || 'fail') };
         }
+    }
+
+    async function fetchTokenData(address) {
+        const first = await _fetchDexScreenerOnce(address);
+        if (first.data !== null || first.error === null) return first;
+        // 1회 재시도 (500ms 지연)
+        await new Promise((r) => setTimeout(r, 500));
+        return _fetchDexScreenerOnce(address);
     }
 
     function formatPrice(s) {
@@ -1119,9 +1120,29 @@
     }
 
     let _updateInFlight = false;
+    let _backoffUntil = 0;       // epoch ms — 이 시각까지 10s 백오프
+    const CONCURRENCY_LIMIT = 5;
+    const BACKOFF_THRESHOLD = 0.30; // 30% 이상 실패 시 백오프
+    const BACKOFF_INTERVAL  = 10000;
+    const BACKOFF_DURATION  = 60000;
+
+    async function _runWithConcurrencyLimit(tasks, limit) {
+        const results = new Array(tasks.length);
+        let idx = 0;
+        async function worker() {
+            while (idx < tasks.length) {
+                const i = idx++;
+                results[i] = await tasks[i]();
+            }
+        }
+        await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+        return results;
+    }
 
     async function updateAllTokens() {
         if (_updateInFlight) return;
+        // 백오프 기간 중이면 스킵
+        if (Date.now() < _backoffUntil) return;
         _updateInFlight = true;
 
         const grid = document.querySelector('.token-grid');
@@ -1133,43 +1154,57 @@
         }
 
         const t0 = Date.now();
-        console.debug('[update] start', new Date(t0).toISOString());
+        console.debug('[update] start', new Date(t0).toISOString(), `(${addresses.length} tokens)`);
 
         if (indicator) indicator.classList.add('update-indicator--active');
         grid.classList.add('token-grid--updating');
         try {
-            // 토큰별로 fetch 후 즉시 DOM 업데이트 (Promise.all 블로킹 방지)
-            const results = await Promise.all(
-                addresses.map(async (address) => {
-                    const result = await fetchTokenData(address);
-                    // fetch 완료 즉시 해당 카드 DOM 업데이트
-                    const ref = cardRefs.find((r) => r.address === address);
-                    if (ref) {
-                        const prevPrice = ref.lastPrice;
-                        updateCardContent(ref.refs, result, prevPrice);
-                        ref.lastPrice = result.data?.priceUsd ?? ref.lastPrice;
-                        if (result.data != null) {
-                            const isFirstData = ref.lastGoodData == null;
-                            ref.lastGoodData = result.data;
-                            if (isFirstData && ref.vol5mHistory.length === 0) {
-                                const stored = loadSpikeHistory(ref.address);
-                                if (stored && stored.history.length > 0) {
-                                    ref.vol5mHistory = stored.history;
-                                    ref.lastSnapshotBucketKey = stored.bucketKey;
-                                    updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
-                                } else {
-                                    prefillVol5mHistory(ref);
-                                }
+            let failCount = 0;
+
+            const tasks = addresses.map((address) => async () => {
+                const result = await fetchTokenData(address);
+                // fetch 완료 즉시 해당 카드 DOM 업데이트
+                const ref = cardRefs.find((r) => r.address === address);
+                if (ref) {
+                    const prevPrice = ref.lastPrice;
+                    // 실패 시 lastGoodData로 렌더링 (Error loading 방지)
+                    const renderItem = result.data != null
+                        ? result
+                        : { address, data: ref.lastGoodData, error: ref.lastGoodData ? null : result.error };
+                    updateCardContent(ref.refs, renderItem, prevPrice);
+                    if (result.data != null) {
+                        ref.lastPrice = result.data.priceUsd ?? ref.lastPrice;
+                        const isFirstData = ref.lastGoodData == null;
+                        ref.lastGoodData = result.data;
+                        if (isFirstData && ref.vol5mHistory.length === 0) {
+                            const stored = loadSpikeHistory(ref.address);
+                            if (stored && stored.history.length > 0) {
+                                ref.vol5mHistory = stored.history;
+                                ref.lastSnapshotBucketKey = stored.bucketKey;
+                                updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
+                            } else {
+                                prefillVol5mHistory(ref);
                             }
                         }
                         console.debug('[update] card updated', address,
-                            'price =', result.data?.priceUsd ?? '(no data)',
-                            'prev =', prevPrice);
+                            'price =', result.data.priceUsd, 'prev =', prevPrice);
+                    } else {
+                        failCount++;
+                        console.debug('[update] card kept last data', address, 'error =', result.error);
                     }
-                    return { address, ...result };
-                })
-            );
-            console.debug('[update] all done in', Date.now() - t0, 'ms');
+                }
+                return { address, ...result };
+            });
+
+            const results = await _runWithConcurrencyLimit(tasks, CONCURRENCY_LIMIT);
+            console.debug('[update] done in', Date.now() - t0, 'ms —', failCount, 'failures');
+
+            // 실패율 30% 초과 시 백오프
+            if (addresses.length > 0 && failCount / addresses.length > BACKOFF_THRESHOLD) {
+                _backoffUntil = Date.now() + BACKOFF_DURATION;
+                console.warn('[update] high failure rate, backing off for 60s');
+            }
+
             await checkAlerts(results);
         } finally {
             grid.classList.remove('token-grid--updating');
