@@ -213,7 +213,12 @@
 
     function updateSpikeIndicator(el, history) {
         if (!el) return;
-        const count = Array.isArray(history) ? history.filter(e => e.v >= VOL5M_SPIKE_THRESHOLD).length : 0;
+        const count = Array.isArray(history)
+            ? history.filter(e => {
+                const n = Number(e.v);
+                return Number.isFinite(n) && n >= VOL5M_SPIKE_THRESHOLD;
+              }).length
+            : 0;
         if (count === 0) {
             el.textContent = '';
             el.style.display = 'none';
@@ -978,13 +983,14 @@
 
     function prefillVol5mHistory(ref) {
         if (!ref.lastGoodData) return;
-        const v = ref.lastGoodData.volume5m;
-        if (v == null) return;
+        const raw = ref.lastGoodData.volume5m;
+        const v = Number(raw);
+        if (!Number.isFinite(v)) return;
         const now = new Date();
-        const t = now.toISOString();
-        ref.vol5mHistory = Array.from({ length: 12 }, () => ({ t, v }));
+        ref.vol5mHistory = [{ t: now.toISOString(), v }];
         ref.lastSnapshotBucketKey = getBucketKey(now);
         updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
+        console.debug('[vol5m prefill]', ref.address, 'volume5m =', v, 'history =', ref.vol5mHistory);
     }
 
     function trySnapshotVol5m() {
@@ -993,12 +999,13 @@
         for (const ref of cardRefs) {
             if (ref.lastSnapshotBucketKey === bucketKey) continue;
             if (!ref.lastGoodData) continue;
-            const v = ref.lastGoodData.volume5m;
-            if (v == null) continue;
+            const v = Number(ref.lastGoodData.volume5m);
+            if (!Number.isFinite(v)) continue;
             ref.lastSnapshotBucketKey = bucketKey;
             ref.vol5mHistory.push({ t: now.toISOString(), v });
             if (ref.vol5mHistory.length > 12) ref.vol5mHistory.shift();
             updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
+            console.debug('[vol5m snapshot]', ref.address, 'bucket =', bucketKey, 'v =', v, 'history =', ref.vol5mHistory.map(e => e.v));
         }
     }
 
