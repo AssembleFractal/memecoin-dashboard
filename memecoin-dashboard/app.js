@@ -209,28 +209,17 @@
     let alertsCache = [];
     let historyUnreadCount = 0;
 
-    function updateFireIndicator(fireIndicator, volume24h, marketCap) {
+    function updateFireIndicator(fireIndicator, volume1h) {
         if (!fireIndicator) return;
-        const vol = volume24h != null && !Number.isNaN(Number(volume24h)) ? Number(volume24h) : 0;
-        const mc = marketCap != null && !Number.isNaN(Number(marketCap)) && Number(marketCap) > 0 ? Number(marketCap) : 0;
-        const ratio = mc > 0 ? vol / mc : 0;
-        
-        if (ratio < 1) {
-            fireIndicator.textContent = '';
-            fireIndicator.style.display = 'none';
-        } else if (ratio >= 4) {
-            fireIndicator.textContent = '🔥🔥🔥+';
-            fireIndicator.style.display = 'block';
-        } else if (ratio >= 3) {
-            fireIndicator.textContent = '🔥🔥🔥';
-            fireIndicator.style.display = 'block';
-        } else if (ratio >= 2) {
-            fireIndicator.textContent = '🔥🔥';
-            fireIndicator.style.display = 'block';
-        } else {
-            fireIndicator.textContent = '🔥';
-            fireIndicator.style.display = 'block';
-        }
+        const vol = volume1h != null && !Number.isNaN(Number(volume1h)) ? Number(volume1h) : 0;
+        let text = '';
+        if      (vol >= 4_000_000) text = '🔥🔥🔥+';
+        else if (vol >= 3_000_000) text = '🔥🔥🔥';
+        else if (vol >= 2_000_000) text = '🔥🔥';
+        else if (vol >= 1_000_000) text = '🔥';
+        else if (vol >=   500_000) text = '💧';
+        fireIndicator.textContent = text;
+        fireIndicator.style.display = text ? 'block' : 'none';
     }
 
     function updateHistoryBadge(count) {
@@ -274,8 +263,8 @@
         modal.box.dataset.tokenAddress = tokenAddress;
         modal.box.dataset.tokenSymbol = tokenSymbol;
         modal.tokenLabel.textContent = tokenSymbol + (currentPrice != null ? ' · $' + formatPrice(String(currentPrice)) : '');
-        modal.priceInput.value = '';
-        modal.priceInput.placeholder = currentPrice != null ? formatPrice(String(currentPrice)) : '0.00';
+        modal.priceInput.placeholder = '0.00';
+        modal.priceInput.value = currentPrice != null ? formatPrice(String(currentPrice)) : '';
         renderModalAlertsList(tokenAddress);
         modal.saveBtn.onclick = () => {
             const targetPrice = parseFloat(modal.priceInput.value);
@@ -302,6 +291,7 @@
         modal.overlay.classList.add('alert-modal-overlay--open');
         modal.overlay.setAttribute('aria-hidden', 'false');
         modal.priceInput.focus();
+        modal.priceInput.select();
     }
 
     function closeAlertsModal() {
@@ -481,7 +471,7 @@
                 const note = (it.note || '').toString();
                 contentHtml = '<span class="history-panel-symbol">' + escapeHtml(symbol) + '</span> <span class="history-panel-detail">' + escapeHtml(note) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
             } else {
-                const direction = it.actualPrice >= it.targetPrice ? 'above' : 'below';
+                const direction = 'crossed';
                 contentHtml = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">' + escapeHtml(direction) + ' $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
             }
             row.innerHTML = contentHtml;
@@ -788,7 +778,7 @@
         info.append(logoRow, tickerRow, priceEl, socialLinksRow, stats);
         card.append(deleteBtn, info);
 
-        updateFireIndicator(fireIndicator, data?.volume24h, data?.marketCap);
+        updateFireIndicator(fireIndicator, data?.volume1h);
 
         const refs = {
             card, tickerEl, priceEl, fdvVal, mcVal, volVal,
@@ -821,7 +811,7 @@
         refs.mcVal.textContent = formatDexScreener(data?.marketCap);
         refs.volVal.textContent = formatDexScreener(data?.volume24h);
 
-        updateFireIndicator(refs.fireIndicator, data?.volume24h, data?.marketCap);
+        updateFireIndicator(refs.fireIndicator, data?.volume1h);
 
         const fallbackLetter = (data?.symbol || '?')[0].toUpperCase();
         if (refs.logoFallback) refs.logoFallback.textContent = error ? '?' : fallbackLetter;
