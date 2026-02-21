@@ -1296,7 +1296,38 @@
         }
     }
 
+    let _addInFlight = false;
+
+    async function _fetchForAddToken(addr) {
+        // 폴링 루프와 완전히 독립된 fetch (자체 AbortController)
+        const url = `${DEXSCREENER_API}/${encodeURIComponent(addr)}?t=${Date.now()}`;
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 12000);
+        try {
+            console.debug('[addToken] fetching', addr);
+            const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
+            clearTimeout(tid);
+            console.debug('[addToken] fetch status', res.status, addr);
+            if (!res.ok) return { data: null, error: `HTTP ${res.status}` };
+            let json;
+            try { json = JSON.parse(await res.text()); } catch { return { data: null, error: 'parse' }; }
+            const data = parseDexScreenerResponse(json);
+            console.debug('[addToken] pairs found', json?.pairs?.length ?? 0, addr);
+            return data ? { data, error: null } : { data: null, error: 'No pairs found' };
+        } catch (e) {
+            clearTimeout(tid);
+            const err = e?.name === 'AbortError' ? 'timeout' : (e?.message || 'fail');
+            console.debug('[addToken] fetch error', err, addr);
+            return { data: null, error: err };
+        }
+    }
+
     async function addToken(address) {
+        if (_addInFlight) {
+            console.debug('[addToken] blocked — already in flight');
+            return;
+        }
+
         const addr = typeof address === 'string' ? address.trim() : '';
         const valid = validateContractAddress(addr);
         if (!valid.ok) {
@@ -1310,43 +1341,60 @@
             return;
         }
 
+        _addInFlight = true;
         const btn = document.getElementById('add-token-btn');
         const input = document.getElementById('token-address-input');
         if (btn) btn.disabled = true;
+        if (input) input.disabled = true;
 
-        const { data, error } = await fetchTokenData(addr);
-        if (error) {
-            alert('Invalid or not found. Check the contract address.');
+        console.debug('[addToken] start', addr);
+        try {
+            // 1차 조회
+            let { data, error } = await _fetchForAddToken(addr);
+
+            // 네트워크/타임아웃 실패 시 1회 재시도
+            if (!data && error && error !== 'No pairs found') {
+                console.debug('[addToken] retrying after 800ms', addr);
+                await new Promise((r) => setTimeout(r, 800));
+                ({ data, error } = await _fetchForAddToken(addr));
+            }
+
+            if (!data) {
+                alert(error === 'No pairs found'
+                    ? 'Token not found on DexScreener.'
+                    : 'Lookup failed. Check connection and try again.');
+                console.debug('[addToken] lookup failed, no state change', addr, error);
+                return; // 상태 변경 없이 종료
+            }
+
+            // 조회 성공 후에만 서버에 저장 (commit on success)
+            const api = await apiAddToken(addr);
+            if (!api.ok) {
+                alert(api.error || 'Failed to add token.');
+                console.debug('[addToken] apiAddToken failed', addr);
+                return;
+            }
+
+            const grid = document.querySelector('.token-grid');
+            if (!grid) return;
+
+            // 기존 카드들은 현재 lastGoodData로 재사용, 신규 토큰만 fetch 결과 사용
+            const next = getTokens();
+            const results = next.map((a) => {
+                if (a === addr) return { address: a, data, error: null };
+                const existing = cardRefs.find((r) => r.address === a);
+                return { address: a, data: existing?.lastGoodData ?? null, error: null };
+            });
+            renderTokenCards(grid, results, { addedAddress: addr });
+
+            if (input) input.value = '';
+            if (next.length === 1) startUpdateTimer();
+            console.debug('[addToken] success', addr);
+        } finally {
+            _addInFlight = false;
             if (btn) btn.disabled = false;
-            return;
+            if (input) input.disabled = false;
         }
-
-        const api = await apiAddToken(addr);
-        if (!api.ok) {
-            alert(api.error || 'Failed to add token.');
-            if (btn) btn.disabled = false;
-            return;
-        }
-
-        const grid = document.querySelector('.token-grid');
-        if (!grid) {
-            if (btn) btn.disabled = false;
-            return;
-        }
-
-        const next = getTokens();
-        const results = await Promise.all(
-            next.map(async (a) => {
-                const r = a === addr ? { address: a, data, error: null } : await fetchTokenData(a).then((x) => ({ address: a, ...x }));
-                return r;
-            })
-        );
-        renderTokenCards(grid, results, { addedAddress: addr });
-
-        if (input) input.value = '';
-        if (btn) btn.disabled = false;
-
-        if (next.length === 1) startUpdateTimer();
     }
 
     async function removeToken(address) {
