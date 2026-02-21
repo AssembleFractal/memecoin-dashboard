@@ -644,7 +644,7 @@
     async function _fetchDexScreenerOnce(address) {
         const url = `${DEXSCREENER_API}/${encodeURIComponent(address)}?t=${Date.now()}`;
         const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), 5000);
+        const tid = setTimeout(() => controller.abort(), 12000);
         try {
             const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
             clearTimeout(tid);
@@ -662,8 +662,8 @@
     async function fetchTokenData(address) {
         const first = await _fetchDexScreenerOnce(address);
         if (first.data !== null || first.error === null) return first;
-        // 1회 재시도 (500ms 지연)
-        await new Promise((r) => setTimeout(r, 500));
+        // 1회 재시도 (800ms 지연)
+        await new Promise((r) => setTimeout(r, 800));
         return _fetchDexScreenerOnce(address);
     }
 
@@ -1091,30 +1091,52 @@
         }
     }
 
+    let _pollActive = false; // 루프 실행 여부 플래그
+
+    async function _pollLoop() {
+        if (!_pollActive) return;
+        try {
+            await updateAllTokens();
+        } catch (e) {
+            console.error('updateAllTokens failed', e);
+        }
+        try {
+            pollHistoryUnread();
+        } catch (e) {
+            console.error('pollHistoryUnread failed', e);
+        }
+        if (_pollActive) {
+            updateTimer = setTimeout(_pollLoop, UPDATE_INTERVAL);
+        }
+    }
+
+    function _snapshotLoop() {
+        if (!_pollActive) return;
+        try {
+            trySnapshotVol5m();
+        } catch (e) {
+            console.error('trySnapshotVol5m failed', e);
+        }
+        if (_pollActive) {
+            snapshotTimer = setTimeout(_snapshotLoop, SNAPSHOT_INTERVAL);
+        }
+    }
+
     function startUpdateTimer() {
         stopUpdateTimer();
-        // 5초 루프: 가격/UI 업데이트 + 히스토리 폴링
-        updateTimer = setInterval(async () => {
-            try {
-                await updateAllTokens();
-            } catch (e) {
-                console.error('updateAllTokens failed', e);
-            }
-            pollHistoryUnread();
-        }, UPDATE_INTERVAL);
-        // 60초 루프: ⚡ 스냅샷만 (DexScreener 재호출 없음, lastGoodData 사용)
-        snapshotTimer = setInterval(() => {
-            trySnapshotVol5m();
-        }, SNAPSHOT_INTERVAL);
+        _pollActive = true;
+        updateTimer = setTimeout(_pollLoop, UPDATE_INTERVAL);
+        snapshotTimer = setTimeout(_snapshotLoop, SNAPSHOT_INTERVAL);
     }
 
     function stopUpdateTimer() {
+        _pollActive = false;
         if (updateTimer) {
-            clearInterval(updateTimer);
+            clearTimeout(updateTimer);
             updateTimer = null;
         }
         if (snapshotTimer) {
-            clearInterval(snapshotTimer);
+            clearTimeout(snapshotTimer);
             snapshotTimer = null;
         }
     }
