@@ -5,7 +5,7 @@
     const DEXSCREENER_API = 'https://api.dexscreener.com/latest/dex/tokens';
     const CONFIG_URL = 'config.json';
     const API_URL = 'api.php';
-    const UPDATE_INTERVAL = 5000;
+    const UPDATE_INTERVAL = 60000;
 
     /** @type {Array<{ address: string, refs: object, lastPrice: string | null }>} */
     let cardRefs = [];
@@ -208,6 +208,20 @@
 
     let alertsCache = [];
     let historyUnreadCount = 0;
+
+    const VOL5M_SPIKE_THRESHOLD = 50_000;
+
+    function updateSpikeIndicator(el, history) {
+        if (!el) return;
+        const count = Array.isArray(history) ? history.filter(e => e.v >= VOL5M_SPIKE_THRESHOLD).length : 0;
+        if (count === 0) {
+            el.textContent = '';
+            el.style.display = 'none';
+            return;
+        }
+        el.textContent = count >= 6 ? `⚡ x${count}` : '⚡'.repeat(count);
+        el.style.display = 'block';
+    }
 
     function updateFireIndicator(fireIndicator, volume1h) {
         if (!fireIndicator) return;
@@ -461,20 +475,30 @@
         const list = Array.isArray(items) ? items : [];
         h.empty.classList.toggle('history-panel-empty--hidden', list.length > 0);
         for (const it of list) {
+            const isVolumeSpike = (it.type || '') === 'volume_spike';
             const row = document.createElement('div');
             row.className = 'history-panel-row' + (it.read ? ' history-panel-row--read' : '');
+            row.dataset.type = isVolumeSpike ? 'volume_spike' : 'price_alert';
             const timeStr = formatKST(it.triggeredAt);
-            const isVolumeSpike = (it.type || '') === 'volume_spike';
             let contentHtml;
             if (isVolumeSpike) {
                 const symbol = (it.tokenSymbol || '—').toString().toUpperCase();
                 const note = (it.note || '').toString();
                 contentHtml = '<span class="history-panel-symbol">' + escapeHtml(symbol) + '</span> <span class="history-panel-detail">' + escapeHtml(note) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
             } else {
-                const direction = 'crossed';
-                contentHtml = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">' + escapeHtml(direction) + ' $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
+                contentHtml = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">crossed $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
             }
             row.innerHTML = contentHtml;
+            // 개별 카드 클릭 → read 처리
+            row.addEventListener('click', () => {
+                if (row.classList.contains('history-panel-row--read')) return;
+                apiMarkHistoryRead(it.id).then((r) => {
+                    if (r.ok) {
+                        row.classList.add('history-panel-row--read');
+                        updateHistoryBadge(r.unreadCount);
+                    }
+                });
+            });
             const deleteBtn = row.querySelector('.history-item-delete');
             deleteBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -634,6 +658,11 @@
         fireIndicator.className = 'token-fire-indicator';
         card.appendChild(fireIndicator);
 
+        const spikeIndicator = document.createElement('div');
+        spikeIndicator.className = 'token-spike-indicator';
+        spikeIndicator.style.display = 'none';
+        card.appendChild(spikeIndicator);
+
         const deleteBtn = document.createElement('button');
         deleteBtn.type = 'button';
         deleteBtn.className = 'token-card-delete';
@@ -783,7 +812,7 @@
         const refs = {
             card, tickerEl, priceEl, fdvVal, mcVal, volVal,
             logoImg, logoFallback,
-            fireIndicator,
+            fireIndicator, spikeIndicator,
         };
         return { card, refs };
     }
@@ -837,11 +866,16 @@
         for (const item of list) {
             const out = createTokenCard(item);
             if (addedAddress && item.address === addedAddress) out.card.classList.add('token-card--enter');
-            cardRefs.push({
+            const newRef = {
                 address: item.address,
                 refs: out.refs,
                 lastPrice: item.data?.priceUsd ?? null,
-            });
+                vol5mHistory: [],
+                lastGoodData: item.data ?? null,
+                lastSnapshotBucketKey: null,
+            };
+            if (newRef.lastGoodData) prefillVol5mHistory(newRef);
+            cardRefs.push(newRef);
             fragment.appendChild(out.card);
         }
         grid.appendChild(fragment);
@@ -931,7 +965,42 @@
         cardRefs = [];
     }
 
-    const SPIKE_HIGHLIGHT_WINDOW_MS = 15 * 60 * 1000; // 15분 (서버 히스토리 기준 테두리 유지)
+    const SPIKE_HIGHLIGHT_WINDOW_MS = 10 * 60 * 1000; // 10분 (서버 히스토리 기준 테두리 유지)
+
+    function getBucketKey(now) {
+        const year        = now.getUTCFullYear();
+        const month       = now.getUTCMonth() + 1; // 1-based
+        const date        = now.getUTCDate();
+        const hour        = now.getUTCHours();
+        const bucketIndex = Math.floor(now.getUTCMinutes() / 5); // 0–11
+        return `${year}-${month}-${date}-${hour}-${bucketIndex}`;
+    }
+
+    function prefillVol5mHistory(ref) {
+        if (!ref.lastGoodData) return;
+        const v = ref.lastGoodData.volume5m;
+        if (v == null) return;
+        const now = new Date();
+        const t = now.toISOString();
+        ref.vol5mHistory = Array.from({ length: 12 }, () => ({ t, v }));
+        ref.lastSnapshotBucketKey = getBucketKey(now);
+        updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
+    }
+
+    function trySnapshotVol5m() {
+        const now = new Date();
+        const bucketKey = getBucketKey(now);
+        for (const ref of cardRefs) {
+            if (ref.lastSnapshotBucketKey === bucketKey) continue;
+            if (!ref.lastGoodData) continue;
+            const v = ref.lastGoodData.volume5m;
+            if (v == null) continue;
+            ref.lastSnapshotBucketKey = bucketKey;
+            ref.vol5mHistory.push({ t: now.toISOString(), v });
+            if (ref.vol5mHistory.length > 12) ref.vol5mHistory.shift();
+            updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
+        }
+    }
 
     function startUpdateTimer() {
         stopUpdateTimer();
@@ -941,6 +1010,7 @@
             } catch (e) {
                 console.error('updateAllTokens failed', e);
             }
+            trySnapshotVol5m();
             pollHistoryUnread();
         }, UPDATE_INTERVAL);
     }
@@ -972,6 +1042,11 @@
                 const ref = cardRefs[i];
                 updateCardContent(ref.refs, results[i], ref.lastPrice);
                 ref.lastPrice = results[i].data?.priceUsd ?? null;
+                if (results[i].data != null) {
+                    const isFirstData = ref.lastGoodData == null;
+                    ref.lastGoodData = results[i].data;
+                    if (isFirstData) prefillVol5mHistory(ref);
+                }
             }
             await checkAlerts(results);
         } finally {

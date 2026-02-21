@@ -248,6 +248,20 @@ main {
     pointer-events: none;
 }
 
+.token-spike-indicator {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    font-size: 10px;
+    line-height: 1;
+    z-index: 10;
+    pointer-events: none;
+    color: #ffe043;
+    letter-spacing: -0.5px;
+    font-weight: 600;
+    text-shadow: 0 0 6px rgba(255, 220, 0, 0.45);
+}
+
 .token-grid--updating .token-card {
     opacity: 0.94;
 }
@@ -885,12 +899,45 @@ main {
     font-size: 0.8125rem;
     border-radius: var(--radius-sm);
     margin-bottom: 0.25rem;
-    background: var(--bg-base);
-    border: 1px solid transparent;
+    background: #181818;
+    border: 1px solid var(--border);
+    border-left: 3px solid transparent;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+    transition: opacity 180ms ease, border-left-color 180ms ease,
+                background 180ms ease, box-shadow 180ms ease, color 180ms ease;
 }
 
+/* 미읽음 — volume spike: 주황 왼쪽 바 */
+.history-panel-row:not(.history-panel-row--read)[data-type="volume_spike"] {
+    border-left-color: #f5820d;
+    background: #1d1a14;
+}
+
+/* 미읽음 — price alert: 파란 왼쪽 바 */
+.history-panel-row:not(.history-panel-row--read)[data-type="price_alert"] {
+    border-left-color: #3b82f6;
+    background: #12192a;
+}
+
+/* 읽음 */
 .history-panel-row--read {
-    opacity: 0.7;
+    opacity: 0.72;
+    background: var(--bg-base);
+    border-left-color: transparent;
+    box-shadow: none;
+    cursor: default;
+}
+
+.history-panel-row--read .history-panel-symbol,
+.history-panel-row--read .history-panel-detail,
+.history-panel-row--read .history-panel-time {
+    color: var(--text-muted);
+}
+
+/* 미읽음 심볼 — 더 밝게 */
+.history-panel-row:not(.history-panel-row--read) .history-panel-symbol {
+    color: #ffffff;
 }
 
 .history-panel-symbol {
