@@ -642,16 +642,27 @@
     }
 
     async function fetchTokenData(address) {
-        const url = `${DEXSCREENER_API}/${encodeURIComponent(address)}`;
+        const url = `${API_URL}?action=dex&address=${encodeURIComponent(address)}&_t=${Date.now()}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
         try {
-            const res = await fetch(url);
+            const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
+            clearTimeout(timeout);
             if (!res.ok) return { data: null, error: `HTTP ${res.status}` };
-            const json = await res.json();
+            let json;
+            try {
+                const raw = await res.text();
+                json = JSON.parse(raw);
+            } catch (e) {
+                return { data: null, error: 'JSON parse failed' };
+            }
+            if (json?.error) return { data: null, error: null }; // proxy error → show last good data
             const data = parseDexScreenerResponse(json);
-            if (!data) return { data: null, error: 'No pairs' };
+            if (!data) return { data: null, error: null }; // no pairs → keep last good data
             return { data, error: null };
         } catch (e) {
-            return { data: null, error: e?.message || 'Request failed' };
+            clearTimeout(timeout);
+            return { data: null, error: e?.name === 'AbortError' ? 'Timeout' : (e?.message || 'Request failed') };
         }
     }
 
@@ -1107,46 +1118,63 @@
         }
     }
 
+    let _updateInFlight = false;
+
     async function updateAllTokens() {
+        if (_updateInFlight) return;
+        _updateInFlight = true;
+
         const grid = document.querySelector('.token-grid');
         const indicator = document.querySelector('.update-indicator');
         const addresses = getTokens();
-        if (!grid || !addresses.length || !cardRefs.length) return;
+        if (!grid || !addresses.length || !cardRefs.length) {
+            _updateInFlight = false;
+            return;
+        }
+
+        const t0 = Date.now();
+        console.debug('[update] start', new Date(t0).toISOString());
 
         if (indicator) indicator.classList.add('update-indicator--active');
         grid.classList.add('token-grid--updating');
         try {
+            // 토큰별로 fetch 후 즉시 DOM 업데이트 (Promise.all 블로킹 방지)
             const results = await Promise.all(
                 addresses.map(async (address) => {
-                    const { data, error } = await fetchTokenData(address);
-                    return { address, data, error };
+                    const result = await fetchTokenData(address);
+                    // fetch 완료 즉시 해당 카드 DOM 업데이트
+                    const ref = cardRefs.find((r) => r.address === address);
+                    if (ref) {
+                        const prevPrice = ref.lastPrice;
+                        updateCardContent(ref.refs, result, prevPrice);
+                        ref.lastPrice = result.data?.priceUsd ?? ref.lastPrice;
+                        if (result.data != null) {
+                            const isFirstData = ref.lastGoodData == null;
+                            ref.lastGoodData = result.data;
+                            if (isFirstData && ref.vol5mHistory.length === 0) {
+                                const stored = loadSpikeHistory(ref.address);
+                                if (stored && stored.history.length > 0) {
+                                    ref.vol5mHistory = stored.history;
+                                    ref.lastSnapshotBucketKey = stored.bucketKey;
+                                    updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
+                                } else {
+                                    prefillVol5mHistory(ref);
+                                }
+                            }
+                        }
+                        console.debug('[update] card updated', address,
+                            'price =', result.data?.priceUsd ?? '(no data)',
+                            'prev =', prevPrice);
+                    }
+                    return { address, ...result };
                 })
             );
-            for (let i = 0; i < results.length && i < cardRefs.length; i++) {
-                if (cardRefs[i].address !== results[i].address) continue;
-                const ref = cardRefs[i];
-                updateCardContent(ref.refs, results[i], ref.lastPrice);
-                ref.lastPrice = results[i].data?.priceUsd ?? null;
-                if (results[i].data != null) {
-                    const isFirstData = ref.lastGoodData == null;
-                    ref.lastGoodData = results[i].data;
-                    if (isFirstData && ref.vol5mHistory.length === 0) {
-                        // localStorage에 복원 가능한 이력이 있으면 우선 사용
-                        const stored = loadSpikeHistory(ref.address);
-                        if (stored && stored.history.length > 0) {
-                            ref.vol5mHistory = stored.history;
-                            ref.lastSnapshotBucketKey = stored.bucketKey;
-                            updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
-                        } else {
-                            prefillVol5mHistory(ref);
-                        }
-                    }
-                }
-            }
+            console.debug('[update] all done in', Date.now() - t0, 'ms');
             await checkAlerts(results);
         } finally {
             grid.classList.remove('token-grid--updating');
             if (indicator) indicator.classList.remove('update-indicator--active');
+            _updateInFlight = false;
         }
     }
 
