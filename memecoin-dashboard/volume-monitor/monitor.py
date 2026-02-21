@@ -16,7 +16,7 @@ load_dotenv()
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens"
 INTERVAL_SEC = 300  # 5 min
-VOL_SPIKE_THRESHOLD = 100_000
+VOL_SPIKE_THRESHOLD = 50_000
 PREV_VOL_5M: dict[str, float] = {}
 
 # MarkdownV2 예약문자: \ _ * [ ] ( ) ~ ` > # + - = | { } . !
