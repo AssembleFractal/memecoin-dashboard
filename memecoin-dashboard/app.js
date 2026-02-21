@@ -873,6 +873,8 @@
 
     function renderTokenCards(grid, list, opts) {
         const addedAddress = opts && opts.addedAddress;
+        // 기존 in-memory 상태를 주소 기준으로 보존
+        const prevByAddr = new Map(cardRefs.map((r) => [r.address, r]));
         destroySortable();
         cardRefs = [];
         grid.innerHTML = '';
@@ -881,16 +883,37 @@
         for (const item of list) {
             const out = createTokenCard(item);
             if (addedAddress && item.address === addedAddress) out.card.classList.add('token-card--enter');
+
+            const prev = prevByAddr.get(item.address);
+            // in-memory 이력 보존 우선, 없으면 localStorage에서 복원
+            let vol5mHistory = prev?.vol5mHistory ?? null;
+            let lastSnapshotBucketKey = prev?.lastSnapshotBucketKey ?? null;
+            if (!vol5mHistory || vol5mHistory.length === 0) {
+                const stored = loadSpikeHistory(item.address);
+                if (stored) {
+                    vol5mHistory = stored.history;
+                    lastSnapshotBucketKey = stored.bucketKey;
+                }
+            }
+            vol5mHistory = vol5mHistory || [];
+
             const newRef = {
                 address: item.address,
                 refs: out.refs,
-                lastPrice: item.data?.priceUsd ?? null,
-                vol5mHistory: [],
-                lastGoodData: item.data ?? null,
-                lastSnapshotBucketKey: null,
-                lastPriceAlertTs: null,
+                lastPrice: item.data?.priceUsd ?? prev?.lastPrice ?? null,
+                vol5mHistory,
+                lastGoodData: item.data ?? prev?.lastGoodData ?? null,
+                lastSnapshotBucketKey,
+                lastPriceAlertTs: prev?.lastPriceAlertTs ?? null,
             };
-            if (newRef.lastGoodData) prefillVol5mHistory(newRef);
+
+            if (vol5mHistory.length > 0) {
+                // 복원된 이력으로 즉시 표시
+                updateSpikeIndicator(newRef.refs.spikeIndicator, vol5mHistory);
+            } else if (newRef.lastGoodData) {
+                prefillVol5mHistory(newRef);
+            }
+
             cardRefs.push(newRef);
             fragment.appendChild(out.card);
         }
@@ -982,6 +1005,37 @@
     }
 
     const SPIKE_HIGHLIGHT_WINDOW_MS = 10 * 60 * 1000; // 10분 (서버 히스토리 기준 테두리 유지)
+    const SPIKE_HISTORY_MAX_AGE_MS  = 2 * 60 * 60 * 1000; // 2시간 초과 항목 폐기
+
+    function saveSpikeHistory(address, history, bucketKey) {
+        try {
+            localStorage.setItem(`spikeHistory:${address}`, JSON.stringify({ history, bucketKey }));
+        } catch (e) {
+            // localStorage 쓰기 실패 시 조용히 무시
+        }
+    }
+
+    function loadSpikeHistory(address) {
+        try {
+            const raw = localStorage.getItem(`spikeHistory:${address}`);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || !Array.isArray(parsed.history)) return null;
+            const cutoff = Date.now() - SPIKE_HISTORY_MAX_AGE_MS;
+            const cleaned = parsed.history
+                .filter(e => {
+                    if (!e || typeof e.t !== 'string') return false;
+                    const v = Number(e.v);
+                    if (!Number.isFinite(v)) return false;
+                    const ts = new Date(e.t).getTime();
+                    return Number.isFinite(ts) && ts >= cutoff;
+                })
+                .slice(-12);
+            return { history: cleaned, bucketKey: parsed.bucketKey || null };
+        } catch (e) {
+            return null;
+        }
+    }
 
     function getBucketKey(now) {
         const year        = now.getUTCFullYear();
@@ -998,9 +1052,11 @@
         const v = Number(raw);
         if (!Number.isFinite(v)) return;
         const now = new Date();
+        const bucketKey = getBucketKey(now);
         ref.vol5mHistory = [{ t: now.toISOString(), v }];
-        ref.lastSnapshotBucketKey = getBucketKey(now);
+        ref.lastSnapshotBucketKey = bucketKey;
         updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
+        saveSpikeHistory(ref.address, ref.vol5mHistory, bucketKey);
         console.debug('[vol5m prefill]', ref.address, 'volume5m =', v, 'history =', ref.vol5mHistory);
     }
 
@@ -1016,6 +1072,7 @@
             ref.vol5mHistory.push({ t: now.toISOString(), v });
             if (ref.vol5mHistory.length > 12) ref.vol5mHistory.shift();
             updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
+            saveSpikeHistory(ref.address, ref.vol5mHistory, ref.lastSnapshotBucketKey);
             console.debug('[vol5m snapshot]', ref.address, 'bucket =', bucketKey, 'v =', v, 'history =', ref.vol5mHistory.map(e => e.v));
         }
     }
@@ -1063,7 +1120,17 @@
                 if (results[i].data != null) {
                     const isFirstData = ref.lastGoodData == null;
                     ref.lastGoodData = results[i].data;
-                    if (isFirstData) prefillVol5mHistory(ref);
+                    if (isFirstData && ref.vol5mHistory.length === 0) {
+                        // localStorage에 복원 가능한 이력이 있으면 우선 사용
+                        const stored = loadSpikeHistory(ref.address);
+                        if (stored && stored.history.length > 0) {
+                            ref.vol5mHistory = stored.history;
+                            ref.lastSnapshotBucketKey = stored.bucketKey;
+                            updateSpikeIndicator(ref.refs.spikeIndicator, ref.vol5mHistory);
+                        } else {
+                            prefillVol5mHistory(ref);
+                        }
+                    }
                 }
             }
             await checkAlerts(results);
