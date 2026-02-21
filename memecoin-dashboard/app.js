@@ -5,12 +5,14 @@
     const DEXSCREENER_API = 'https://api.dexscreener.com/latest/dex/tokens';
     const CONFIG_URL = 'config.json';
     const API_URL = 'api.php';
-    const UPDATE_INTERVAL = 60000;
+    const UPDATE_INTERVAL = 5000;
+    const SNAPSHOT_INTERVAL = 60000;
 
     /** @type {Array<{ address: string, refs: object, lastPrice: string | null }>} */
     let cardRefs = [];
 
     let updateTimer = null;
+    let snapshotTimer = null;
     /** @type {Array<{address: string, order: number}>} */
     let tokenList = [];
     /** @type {Sortable | null} */
@@ -1079,21 +1081,29 @@
 
     function startUpdateTimer() {
         stopUpdateTimer();
+        // 5초 루프: 가격/UI 업데이트 + 히스토리 폴링
         updateTimer = setInterval(async () => {
             try {
                 await updateAllTokens();
             } catch (e) {
                 console.error('updateAllTokens failed', e);
             }
-            trySnapshotVol5m();
             pollHistoryUnread();
         }, UPDATE_INTERVAL);
+        // 60초 루프: ⚡ 스냅샷만 (DexScreener 재호출 없음, lastGoodData 사용)
+        snapshotTimer = setInterval(() => {
+            trySnapshotVol5m();
+        }, SNAPSHOT_INTERVAL);
     }
 
     function stopUpdateTimer() {
         if (updateTimer) {
             clearInterval(updateTimer);
             updateTimer = null;
+        }
+        if (snapshotTimer) {
+            clearInterval(snapshotTimer);
+            snapshotTimer = null;
         }
     }
 
