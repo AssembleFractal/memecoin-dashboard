@@ -1,6 +1,6 @@
 """
 Volume monitor: reads config.json tokens, checks DexScreener 5m volume every 5 min.
-When 5m Vol >= 100k AND 2x+ vs previous 5m: sends Telegram alert and POSTs to dashboard addHistory.
+When 5m Vol >= ALERT_VOLUME_THRESHOLD: sends Telegram alert and POSTs to dashboard addHistory.
 """
 import json
 import os
@@ -16,7 +16,7 @@ load_dotenv()
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens"
 INTERVAL_SEC = 300  # 5 min
-VOL_SPIKE_THRESHOLD = 50_000
+ALERT_VOLUME_THRESHOLD = 50_000
 PREV_VOL_5M: dict[str, float] = {}
 
 # MarkdownV2 예약문자: \ _ * [ ] ( ) ~ ` > # + - = | { } . !
@@ -138,21 +138,21 @@ def main():
             prev_vol = PREV_VOL_5M.get(address)
             if vol5m is not None:
                 PREV_VOL_5M[address] = vol5m
-            if vol5m is None or vol5m < VOL_SPIKE_THRESHOLD:
-                continue
-            if prev_vol is None or prev_vol <= 0:
-                continue
-            if vol5m < prev_vol * 2:
+            if vol5m is None or vol5m < ALERT_VOLUME_THRESHOLD:
                 continue
             print(f"SPIKE detected: {symbol} | 5m vol: {vol5m}")
-            increase_pct = round(((vol5m / prev_vol) - 1) * 100)
             mcap_str = format_vol(mcap) if mcap is not None else "—"
             vol_str = format_vol(vol5m)
+            if prev_vol and prev_vol > 0:
+                increase_pct = round(((vol5m / prev_vol) - 1) * 100)
+                pct_str = f" (+{increase_pct}%)"
+            else:
+                pct_str = ""
             msg = (
                 "*" + _escape_md2(f"${symbol} 5m Volume Spike") + "*"
                 + "\n\n"
                 + _escape_md2(f"MC: ${mcap_str}") + "\n"
-                + _escape_md2(f"5m Vol: ${vol_str} ({increase_pct}%)")
+                + _escape_md2(f"5m Vol: ${vol_str}{pct_str}")
             )
             result = send_telegram(msg, parse_mode="MarkdownV2")
             print(f"Telegram sent: {result}")
@@ -161,7 +161,7 @@ def main():
                 price = float(pair.get("priceUsd") or 0)
             except (TypeError, ValueError):
                 pass
-            note = f"5m Vol Spike ${vol_str} ({increase_pct}%) MC"
+            note = f"5m Vol Spike ${vol_str}{pct_str} MC"
             add_history(address, symbol, price, note)
         time.sleep(INTERVAL_SEC)
 
