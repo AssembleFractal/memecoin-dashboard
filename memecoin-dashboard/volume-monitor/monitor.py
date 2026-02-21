@@ -126,8 +126,25 @@ def add_history(address: str, symbol: str, actual_price: float, note: str) -> bo
         return False
 
 
+def warm_up() -> None:
+    """시작 시 이전 볼륨을 미리 채워서 첫 알림에도 % 표시 가능하게 함."""
+    print("Warm-up: fetching initial volumes...")
+    addresses = [a for a in load_tokens() if a and len(a) >= 20]
+    for address in addresses:
+        pair = fetch_pair(address)
+        if not pair:
+            continue
+        vol5m, symbol, _ = get_volume5m_and_symbol(pair)
+        if vol5m is not None:
+            PREV_VOL_5M[address] = vol5m
+            print(f"  {symbol}: prev_vol set to {vol5m}")
+    print("Warm-up done. Sleeping before first check...")
+    time.sleep(INTERVAL_SEC)
+
+
 def main():
     print("Monitor started")
+    warm_up()
     while True:
         addresses = [a for a in load_tokens() if a and len(a) >= 20]
         for address in addresses:
@@ -145,7 +162,8 @@ def main():
             vol_str = format_vol(vol5m)
             if prev_vol and prev_vol > 0:
                 increase_pct = round(((vol5m / prev_vol) - 1) * 100)
-                pct_str = f" (+{increase_pct}%)"
+                sign = "+" if increase_pct >= 0 else ""
+                pct_str = f" ({sign}{increase_pct}%)"
             else:
                 pct_str = ""
             msg = (

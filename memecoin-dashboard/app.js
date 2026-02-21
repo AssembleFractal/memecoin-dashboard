@@ -593,7 +593,8 @@
         const marketCap = pair.marketCap != null && !Number.isNaN(Number(pair.marketCap)) ? Number(pair.marketCap) : null;
         const fdv = pair.fdv != null && !Number.isNaN(Number(pair.fdv)) ? Number(pair.fdv) : null;
         const volume24h = pair.volume?.h24 != null && !Number.isNaN(Number(pair.volume.h24)) ? Number(pair.volume.h24) : null;
-        const volume5m = pair.volume?.m5 != null && !Number.isNaN(Number(pair.volume.m5)) ? Number(pair.volume.m5) : null;
+        const volume1h  = pair.volume?.h1  != null && !Number.isNaN(Number(pair.volume.h1))  ? Number(pair.volume.h1)  : null;
+        const volume5m  = pair.volume?.m5  != null && !Number.isNaN(Number(pair.volume.m5))  ? Number(pair.volume.m5)  : null;
 
         let twitterUrl = null;
         const socials = base.info?.socials || pair.info?.socials;
@@ -606,7 +607,7 @@
         const GMGN_CHAIN_MAP = { solana: 'sol', base: 'base', bsc: 'bsc', ethereum: 'eth', arbitrum: 'arb', polygon: 'polygon', avalanche: 'avax' };
         const gmgnChain = GMGN_CHAIN_MAP[chainId] || chainId || 'sol';
 
-        return { name, symbol, imageUrl, priceUsd, marketCap, fdv, volume24h, volume5m, twitterUrl, chainId, gmgnChain, pair };
+        return { name, symbol, imageUrl, priceUsd, marketCap, fdv, volume24h, volume1h, volume5m, twitterUrl, chainId, gmgnChain, pair };
     }
 
     async function fetchTokenData(address) {
@@ -1026,6 +1027,10 @@
                     tokenSymbol: a.tokenSymbol || symbol,
                     targetPrice: target,
                     actualPrice: price,
+                    type: 'price_alert',
+                    marketCap: r.data?.marketCap ?? null,
+                    volume1h: r.data?.volume1h ?? null,
+                    volume24h: r.data?.volume24h ?? null,
                 });
                 if (addRes.ok && addRes.unreadCount != null) updateHistoryBadge(addRes.unreadCount);
                 await apiUpdateAlertLastPrice(a.id, price);

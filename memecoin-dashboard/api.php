@@ -25,6 +25,107 @@ $action = isset($_GET['action']) ? trim($_GET['action']) : '';
 $alertsPath = __DIR__ . '/alerts.json';
 $historyPath = __DIR__ . '/history.json';
 
+/* ── Telegram helpers ─────────────────────────────────────────────────── */
+
+function loadEnvFile() {
+    $candidates = [
+        __DIR__ . '/.env',
+        __DIR__ . '/volume-monitor/.env',
+    ];
+    foreach ($candidates as $path) {
+        if (!file_exists($path)) continue;
+        foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === '#') continue;
+            if (strpos($line, '=') === false) continue;
+            [$k, $v] = explode('=', $line, 2);
+            $k = trim($k);
+            $v = trim($v, " \t\"'");
+            if ($k !== '' && getenv($k) === false) putenv("$k=$v");
+        }
+    }
+}
+loadEnvFile();
+
+function formatVolPhp($value) {
+    if ($value === null || !is_numeric($value)) return '—';
+    $value = (float) $value;
+    if ($value < 0) $value = 0;
+    if ($value >= 1e9) return rtrim(rtrim(number_format($value / 1e9, 1), '0'), '.') . 'b';
+    if ($value >= 1e6) return rtrim(rtrim(number_format($value / 1e6, 1), '0'), '.') . 'm';
+    if ($value >= 1e3) return rtrim(rtrim(number_format($value / 1e3, 1), '0'), '.') . 'k';
+    return (string) (int) round($value);
+}
+
+function escapeMarkdownV2Php($text) {
+    return preg_replace('/([_*\[\]()~`>#+\-=|{}.!\\\\])/', '\\\\$1', (string) $text);
+}
+
+function formatPricePhp($price) {
+    if ($price === null || !is_numeric($price)) return '—';
+    $p = (float) $price;
+    if ($p >= 1e6)  return number_format($p, 0, '.', ',');
+    if ($p >= 1)    return number_format($p, 6);
+    if ($p >= 1e-6) return rtrim(number_format($p, 10), '0');
+    return number_format($p, 10);
+}
+
+function sendPriceAlertTelegram($symbol, $targetPrice, $actualPrice, $marketCap, $volume1h, $volume24h) {
+    $botToken = getenv('TELEGRAM_BOT_TOKEN');
+    $chatId   = getenv('TELEGRAM_CHAT_ID');
+    if (!$botToken || !$chatId) return;
+
+    $sym        = escapeMarkdownV2Php('$' . strtoupper($symbol) . ' Price Alert');
+    $alertPrStr = escapeMarkdownV2Php(formatPricePhp($targetPrice));
+    $currPrStr  = escapeMarkdownV2Php(formatPricePhp($actualPrice));
+    $mcStr      = escapeMarkdownV2Php('$' . formatVolPhp($marketCap));
+    $v1hStr     = escapeMarkdownV2Php('$' . formatVolPhp($volume1h));
+    $v24hStr    = escapeMarkdownV2Php('$' . formatVolPhp($volume24h));
+
+    $msg = "*{$sym}*\n\n"
+         . "Alert Price: {$alertPrStr}\n"
+         . "Current Price: {$currPrStr}\n"
+         . "MC: {$mcStr}\n"
+         . "1h V: {$v1hStr}\n"
+         . "24h V: {$v24hStr}";
+
+    $url = "https://api.telegram.org/bot{$botToken}/sendMessage";
+    $payload = json_encode([
+        'chat_id'                  => $chatId,
+        'text'                     => $msg,
+        'parse_mode'               => 'MarkdownV2',
+        'disable_web_page_preview' => true,
+    ]);
+
+    try {
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => $payload,
+                CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+                CURLOPT_TIMEOUT        => 10,
+            ]);
+            curl_exec($ch);
+            curl_close($ch);
+        } else {
+            $ctx = stream_context_create(['http' => [
+                'method'  => 'POST',
+                'header'  => 'Content-Type: application/json',
+                'content' => $payload,
+                'timeout' => 10,
+                'ignore_errors' => true,
+            ]]);
+            @file_get_contents($url, false, $ctx);
+        }
+    } catch (Exception $e) {
+        error_log('sendPriceAlertTelegram failed: ' . $e->getMessage());
+    }
+}
+
+/* ── JSON helpers ─────────────────────────────────────────────────────── */
+
 function loadJson($path, $default) {
     if (!file_exists($path)) {
         return $default;
@@ -196,17 +297,21 @@ if ($action === 'deleteAlert') {
 }
 
 if ($action === 'addHistory') {
-    $triggeredAt = time();
+    $triggeredAt  = time();
+    $itemType     = isset($input['type']) ? trim($input['type']) : '';
+    $marketCap    = isset($input['marketCap'])  && is_numeric($input['marketCap'])  ? (float) $input['marketCap']  : null;
+    $volume1h     = isset($input['volume1h'])   && is_numeric($input['volume1h'])   ? (float) $input['volume1h']   : null;
+    $volume24h    = isset($input['volume24h'])  && is_numeric($input['volume24h'])  ? (float) $input['volume24h']  : null;
     $item = [
-        'id' => bin2hex(random_bytes(8)),
+        'id'           => bin2hex(random_bytes(8)),
         'tokenAddress' => isset($input['tokenAddress']) ? trim($input['tokenAddress']) : '',
-        'tokenSymbol' => isset($input['tokenSymbol']) ? trim($input['tokenSymbol']) : '—',
-        'targetPrice' => isset($input['targetPrice']) ? (float) $input['targetPrice'] : 0,
-        'actualPrice' => isset($input['actualPrice']) ? (float) $input['actualPrice'] : 0,
-        'triggeredAt' => $triggeredAt,
-        'read' => false,
-        'type' => isset($input['type']) ? trim($input['type']) : '',
-        'note' => isset($input['note']) ? trim($input['note']) : '',
+        'tokenSymbol'  => isset($input['tokenSymbol'])  ? trim($input['tokenSymbol'])  : '—',
+        'targetPrice'  => isset($input['targetPrice'])  ? (float) $input['targetPrice']  : 0,
+        'actualPrice'  => isset($input['actualPrice'])  ? (float) $input['actualPrice']  : 0,
+        'triggeredAt'  => $triggeredAt,
+        'read'         => false,
+        'type'         => $itemType,
+        'note'         => isset($input['note']) ? trim($input['note']) : '',
     ];
     $data = loadJson($historyPath, ['items' => [], 'unreadCount' => 0]);
     $items = isset($data['items']) ? $data['items'] : [];
@@ -216,6 +321,17 @@ if ($action === 'addHistory') {
     if (!saveJson($historyPath, $data)) {
         echo json_encode(['ok' => false, 'error' => 'Failed to save']);
         exit;
+    }
+    // 가격 알림일 때만 Telegram 전송 (volume_spike는 monitor.py가 직접 처리)
+    if ($itemType === 'price_alert') {
+        sendPriceAlertTelegram(
+            $item['tokenSymbol'],
+            $item['targetPrice'],
+            $item['actualPrice'],
+            $marketCap,
+            $volume1h,
+            $volume24h
+        );
     }
     echo json_encode(['ok' => true, 'items' => $data['items'], 'unreadCount' => $data['unreadCount']]);
     exit;
