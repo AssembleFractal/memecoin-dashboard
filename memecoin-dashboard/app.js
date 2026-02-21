@@ -488,8 +488,23 @@
             let contentHtml;
             if (isVolumeSpike) {
                 const symbol = (it.tokenSymbol || '—').toString().toUpperCase();
-                const note = (it.note || '').toString();
-                contentHtml = '<span class="history-panel-symbol">' + escapeHtml(symbol) + '</span> <span class="history-panel-detail">' + escapeHtml(note) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
+                // note에서 "MC" 접미사 제거 후 볼륨 스파이크 라인 추출
+                const rawNote = (it.note || '').toString();
+                const spikeLine = rawNote.replace(/\s*MC\s*$/, '').trim();
+                // marketCap: 저장된 필드 우선, 없으면 note 파싱 fallback
+                let mcLine = '';
+                if (it.marketCap != null && Number.isFinite(Number(it.marketCap))) {
+                    mcLine = 'MC: $' + formatDexScreener(Number(it.marketCap));
+                } else {
+                    // note 끝의 "MC" 앞에 있는 금액 파싱 시도
+                    const mcMatch = rawNote.match(/\$[\d.]+[kmb]?\s+MC\s*$/i);
+                    if (mcMatch) mcLine = 'MC: ' + mcMatch[0].replace(/\s*MC\s*$/i, '').trim();
+                }
+                contentHtml = '<span class="history-panel-symbol">' + escapeHtml(symbol) + '</span>'
+                    + '<span class="history-panel-detail">' + escapeHtml(spikeLine) + '</span>'
+                    + (mcLine ? '<span class="history-panel-detail">' + escapeHtml(mcLine) + '</span>' : '')
+                    + '<time class="history-panel-time">' + escapeHtml(timeStr) + '</time>'
+                    + '<button type="button" class="history-item-delete" aria-label="Delete">×</button>';
             } else {
                 contentHtml = '<span class="history-panel-symbol">' + escapeHtml(it.tokenSymbol) + '</span> <span class="history-panel-detail">crossed $' + formatPrice(String(it.targetPrice)) + ' → $' + formatPrice(String(it.actualPrice)) + '</span> <time class="history-panel-time">' + escapeHtml(timeStr) + '</time><button type="button" class="history-item-delete" aria-label="Delete">×</button>';
             }
@@ -878,6 +893,7 @@
                 vol5mHistory: [],
                 lastGoodData: item.data ?? null,
                 lastSnapshotBucketKey: null,
+                lastPriceAlertTs: null,
             };
             if (newRef.lastGoodData) prefillVol5mHistory(newRef);
             cardRefs.push(newRef);
@@ -1062,16 +1078,20 @@
         }
     }
 
+    const PRICE_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
+
     async function checkAlerts(results) {
         const alerts = alertsCache.length ? alertsCache : (await apiGetAlerts()).alerts;
         if (alerts.length === 0) return;
         alertsCache = alerts;
         const activeAlerts = alerts.filter((a) => !a.triggeredAt);
         if (activeAlerts.length === 0) return;
+        const now = Date.now();
         for (const r of results) {
             const price = r.data?.priceUsd != null ? parseFloat(r.data.priceUsd) : null;
             if (price == null || Number.isNaN(price)) continue;
             const symbol = (r.data?.symbol || '—').toString();
+            const cardRef = cardRefs.find((c) => c.address === r.address);
             for (const a of activeAlerts) {
                 if (a.tokenAddress !== r.address) continue;
                 const target = Number(a.targetPrice);
@@ -1094,6 +1114,13 @@
                     alertsCache = (await apiGetAlerts()).alerts;
                     continue;
                 }
+                // 5분 쿨다운 — 동일 토큰에 대해 채널 구분 없이 적용
+                if (cardRef && cardRef.lastPriceAlertTs != null &&
+                    now - cardRef.lastPriceAlertTs < PRICE_ALERT_COOLDOWN_MS) {
+                    await apiUpdateAlertLastPrice(a.id, price);
+                    alertsCache = (await apiGetAlerts()).alerts;
+                    continue;
+                }
                 const addRes = await apiAddHistory({
                     tokenAddress: a.tokenAddress,
                     tokenSymbol: a.tokenSymbol || symbol,
@@ -1105,6 +1132,7 @@
                     volume24h: r.data?.volume24h ?? null,
                 });
                 if (addRes.ok && addRes.unreadCount != null) updateHistoryBadge(addRes.unreadCount);
+                if (cardRef) cardRef.lastPriceAlertTs = now;
                 await apiUpdateAlertLastPrice(a.id, price);
                 alertsCache = (await apiGetAlerts()).alerts;
             }

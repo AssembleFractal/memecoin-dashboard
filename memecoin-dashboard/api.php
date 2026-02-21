@@ -312,6 +312,7 @@ if ($action === 'addHistory') {
         'read'         => false,
         'type'         => $itemType,
         'note'         => isset($input['note']) ? trim($input['note']) : '',
+        'marketCap'    => $marketCap,
     ];
     $data = loadJson($historyPath, ['items' => [], 'unreadCount' => 0]);
     $items = isset($data['items']) ? $data['items'] : [];
