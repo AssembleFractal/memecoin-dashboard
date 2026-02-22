@@ -8,24 +8,15 @@ import re
 import time
 from pathlib import Path
 
+import traceback
+
 import httpx
 from dotenv import load_dotenv
 
-# .env 탐색: 프로젝트 루트 우선, 없으면 volume-monitor 폴더
-_BASE_DIR = Path(__file__).resolve().parent.parent  # memecoin-dashboard/
-_ENV_CANDIDATES = [
-    _BASE_DIR / ".env",
-    Path(__file__).resolve().parent / ".env",  # volume-monitor/.env
-]
-for _env_path in _ENV_CANDIDATES:
-    if _env_path.exists():
-        load_dotenv(dotenv_path=_env_path, override=False)
-        print(f"[env] Loaded: {_env_path}")
-        break
-else:
-    print("[env] WARNING: No .env file found. Env vars must be set externally.")
+BASE_DIR = Path(__file__).resolve().parent.parent  # memecoin-dashboard/
+load_dotenv(BASE_DIR / ".env")
 
-CONFIG_PATH = _BASE_DIR / "config.json"
+CONFIG_PATH = BASE_DIR / "config.json"
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens"
 INTERVAL_SEC = 300  # 5 min
 ALERT_VOLUME_THRESHOLD = 50_000
@@ -158,56 +149,62 @@ def warm_up() -> None:
 
 def main():
     print("Monitor started")
-    # 환경변수 로딩 상태 확인
-    _bot = os.getenv("TELEGRAM_BOT_TOKEN")
-    _chat = os.getenv("TELEGRAM_CHAT_ID")
-    _url  = os.getenv("DASHBOARD_URL")
-    print(f"[env] TELEGRAM_BOT_TOKEN: {'SET' if _bot else 'MISSING'}")
-    print(f"[env] TELEGRAM_CHAT_ID:   {'SET' if _chat else 'MISSING'}")
-    print(f"[env] DASHBOARD_URL:      {_url or 'MISSING'}")
-    if not _bot or not _chat:
-        print("[env] WARNING: Telegram not configured. Alerts will be skipped.")
-    if not _url:
-        print("[env] WARNING: DASHBOARD_URL not set. History will not be saved.")
+    print(f"[ENV] TELEGRAM_BOT_TOKEN loaded: {bool(os.getenv('TELEGRAM_BOT_TOKEN'))}")
+    print(f"[ENV] TELEGRAM_CHAT_ID loaded:   {bool(os.getenv('TELEGRAM_CHAT_ID'))}")
+    print(f"[ENV] DASHBOARD_URL loaded:      {bool(os.getenv('DASHBOARD_URL'))} ({os.getenv('DASHBOARD_URL') or 'MISSING'})")
     warm_up()
     while True:
-        addresses = [a for a in load_tokens() if a and len(a) >= 20]
-        for address in addresses:
-            pair = fetch_pair(address)
-            if not pair:
-                continue
-            vol5m, symbol, mcap = get_volume5m_and_symbol(pair)
-            prev_vol = PREV_VOL_5M.get(address)
-            if vol5m is not None:
-                PREV_VOL_5M[address] = vol5m
-            if vol5m is None or vol5m < ALERT_VOLUME_THRESHOLD:
-                continue
-            print(f"SPIKE detected: {symbol} | 5m vol: {vol5m}")
-            mcap_str = format_vol(mcap) if mcap is not None else "—"
-            vol_str = format_vol(vol5m)
-            if prev_vol and prev_vol > 0:
-                increase_pct = round(((vol5m / prev_vol) - 1) * 100)
-                sign = "+" if increase_pct >= 0 else ""
-                pct_str = f" ({sign}{increase_pct}%)"
-            else:
-                pct_str = ""
-            msg = (
-                "*" + _escape_md2(f"${symbol} 5m Volume Spike") + "*"
-                + "\n\n"
-                + _escape_md2(f"MC: ${mcap_str}") + "\n"
-                + _escape_md2(f"5m Vol: ${vol_str}{pct_str}")
-            )
-            result = send_telegram(msg, parse_mode="MarkdownV2")
-            print(f"Telegram sent: {result}")
-            price = 0.0
-            try:
-                price = float(pair.get("priceUsd") or 0)
-            except (TypeError, ValueError):
-                pass
-            note = f"5m Vol Spike ${vol_str}{pct_str}"
-            add_history(address, symbol, price, note, market_cap=mcap)
+        try:
+            addresses = [a for a in load_tokens() if a and len(a) >= 20]
+            for address in addresses:
+                pair = fetch_pair(address)
+                if not pair:
+                    continue
+                vol5m, symbol, mcap = get_volume5m_and_symbol(pair)
+                prev_vol = PREV_VOL_5M.get(address)
+                if vol5m is not None:
+                    PREV_VOL_5M[address] = vol5m
+                if vol5m is None or vol5m < ALERT_VOLUME_THRESHOLD:
+                    continue
+                print(f"SPIKE detected: {symbol} | 5m vol: {vol5m}")
+                mcap_str = format_vol(mcap) if mcap is not None else "—"
+                vol_str = format_vol(vol5m)
+                if prev_vol and prev_vol > 0:
+                    increase_pct = round(((vol5m / prev_vol) - 1) * 100)
+                    sign = "+" if increase_pct >= 0 else ""
+                    pct_str = f" ({sign}{increase_pct}%)"
+                else:
+                    pct_str = ""
+                msg = (
+                    "*" + _escape_md2(f"${symbol} 5m Volume Spike") + "*"
+                    + "\n\n"
+                    + _escape_md2(f"MC: ${mcap_str}") + "\n"
+                    + _escape_md2(f"5m Vol: ${vol_str}{pct_str}")
+                )
+                result = send_telegram(msg, parse_mode="MarkdownV2")
+                print(f"Telegram sent: {result}")
+                price = 0.0
+                try:
+                    price = float(pair.get("priceUsd") or 0)
+                except (TypeError, ValueError):
+                    pass
+                note = f"5m Vol Spike ${vol_str}{pct_str}"
+                add_history(address, symbol, price, note, market_cap=mcap)
+        except Exception:
+            print("[ERROR] Unexpected error in main loop:")
+            traceback.print_exc()
+            print("[ERROR] Retrying in 5 seconds...")
+            time.sleep(5)
+            continue
         time.sleep(INTERVAL_SEC)
 
 
 if __name__ == "__main__":
-    main()
+    while True:
+        try:
+            main()
+        except Exception:
+            print("[FATAL] main() crashed:")
+            traceback.print_exc()
+            print("[FATAL] Restarting in 5 seconds...")
+            time.sleep(5)
