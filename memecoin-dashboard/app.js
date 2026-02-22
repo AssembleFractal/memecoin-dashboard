@@ -958,7 +958,7 @@
         function applyScroll() {
             if (!dragScrollActive) return;
             if (scrollVelocity !== 0) {
-                window.scrollBy(0, scrollVelocity);
+                if (typeof window !== 'undefined') window.scrollBy(0, scrollVelocity);
             }
             scrollRafId = requestAnimationFrame(applyScroll);
         }
@@ -975,7 +975,7 @@
                 dragMoveBound = (e) => {
                     const y = e.clientY;
                     const top = DRAG_SCROLL_EDGE;
-                    const bottom = window.innerHeight - DRAG_SCROLL_EDGE;
+                    const bottom = (typeof window !== 'undefined' ? window.innerHeight : 800) - DRAG_SCROLL_EDGE;
                     if (y < top) {
                         scrollVelocity = -DRAG_SCROLL_SPEED * (top - y) / top;
                     } else if (y > bottom) {
@@ -1526,7 +1526,7 @@
         }
     }
 
-    window.formatDexScreener = formatDexScreener;
+    if (typeof window !== 'undefined') window.formatDexScreener = formatDexScreener;
 
     document.addEventListener('DOMContentLoaded', () => init().catch((e) => console.error('init failed', e)));
 })();
