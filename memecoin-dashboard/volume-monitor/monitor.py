@@ -11,9 +11,21 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
-load_dotenv()
+# .env 탐색: 프로젝트 루트 우선, 없으면 volume-monitor 폴더
+_BASE_DIR = Path(__file__).resolve().parent.parent  # memecoin-dashboard/
+_ENV_CANDIDATES = [
+    _BASE_DIR / ".env",
+    Path(__file__).resolve().parent / ".env",  # volume-monitor/.env
+]
+for _env_path in _ENV_CANDIDATES:
+    if _env_path.exists():
+        load_dotenv(dotenv_path=_env_path, override=False)
+        print(f"[env] Loaded: {_env_path}")
+        break
+else:
+    print("[env] WARNING: No .env file found. Env vars must be set externally.")
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
+CONFIG_PATH = _BASE_DIR / "config.json"
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens"
 INTERVAL_SEC = 300  # 5 min
 ALERT_VOLUME_THRESHOLD = 50_000
@@ -146,6 +158,17 @@ def warm_up() -> None:
 
 def main():
     print("Monitor started")
+    # 환경변수 로딩 상태 확인
+    _bot = os.getenv("TELEGRAM_BOT_TOKEN")
+    _chat = os.getenv("TELEGRAM_CHAT_ID")
+    _url  = os.getenv("DASHBOARD_URL")
+    print(f"[env] TELEGRAM_BOT_TOKEN: {'SET' if _bot else 'MISSING'}")
+    print(f"[env] TELEGRAM_CHAT_ID:   {'SET' if _chat else 'MISSING'}")
+    print(f"[env] DASHBOARD_URL:      {_url or 'MISSING'}")
+    if not _bot or not _chat:
+        print("[env] WARNING: Telegram not configured. Alerts will be skipped.")
+    if not _url:
+        print("[env] WARNING: DASHBOARD_URL not set. History will not be saved.")
     warm_up()
     while True:
         addresses = [a for a in load_tokens() if a and len(a) >= 20]
