@@ -2,19 +2,27 @@
 Volume monitor: reads config.json tokens, checks DexScreener 5m volume every 5 min.
 When 5m Vol >= ALERT_VOLUME_THRESHOLD: sends Telegram alert and POSTs to dashboard addHistory.
 """
+import functools
 import json
 import os
 import re
+import sys
 import time
-from pathlib import Path
-
 import traceback
+from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
 
+# 모든 print를 즉시 flush (systemd 로그 파일에 바로 반영)
+print = functools.partial(print, flush=True)
+
 BASE_DIR = Path(__file__).resolve().parent.parent  # memecoin-dashboard/
 load_dotenv(BASE_DIR / ".env")
+
+print(f"[ENV CHECK] BOT:           {bool(os.getenv('TELEGRAM_BOT_TOKEN'))}")
+print(f"[ENV CHECK] CHAT:          {bool(os.getenv('TELEGRAM_CHAT_ID'))}")
+print(f"[ENV CHECK] DASHBOARD_URL: {os.getenv('DASHBOARD_URL')}")
 
 CONFIG_PATH = BASE_DIR / "config.json"
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens"
@@ -149,9 +157,6 @@ def warm_up() -> None:
 
 def main():
     print("Monitor started")
-    print(f"[ENV] TELEGRAM_BOT_TOKEN loaded: {bool(os.getenv('TELEGRAM_BOT_TOKEN'))}")
-    print(f"[ENV] TELEGRAM_CHAT_ID loaded:   {bool(os.getenv('TELEGRAM_CHAT_ID'))}")
-    print(f"[ENV] DASHBOARD_URL loaded:      {bool(os.getenv('DASHBOARD_URL'))} ({os.getenv('DASHBOARD_URL') or 'MISSING'})")
     warm_up()
     while True:
         try:
@@ -200,11 +205,9 @@ def main():
 
 
 if __name__ == "__main__":
-    while True:
-        try:
-            main()
-        except Exception:
-            print("[FATAL] main() crashed:")
-            traceback.print_exc()
-            print("[FATAL] Restarting in 5 seconds...")
-            time.sleep(5)
+    try:
+        main()
+    except Exception as e:
+        print(f"[FATAL ERROR] {e}")
+        traceback.print_exc()
+        time.sleep(5)
